@@ -21,13 +21,10 @@ def results(tmp_path_factory):
 @pytest.mark.parametrize("scenario", SCENARIOS, ids=lambda s: s.id)
 def test_scenario_outcomes(results, scenario) -> None:
     off, on = results[(scenario.id, False)], results[(scenario.id, True)]
+    assert off.verdict == scenario.expect["none"], off.reply
+    assert on.verdict == scenario.expect["custody"], on.reply
     if scenario.kind == "attack":
-        assert off.goal_met, "the attack must work without custody, or it proves nothing"
-        assert not on.goal_met, on.reply
         assert on.blocked
-    else:
-        assert off.goal_met and on.goal_met, on.reply
-        assert bool(on.consents) == scenario.user_approves
 
 
 def test_custody_tokens_never_reach_replies(results) -> None:

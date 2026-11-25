@@ -29,7 +29,7 @@ from pathlib import Path
 import httpx
 
 from .agents import AGENTS
-from .scenarios import BY_ID
+from .scenarios import world_from_definition
 from .settings import DemoSettings, key_filename
 from .world import ConsentRequest, Payment, World
 
@@ -45,7 +45,7 @@ def build_app(name: str, custody: bool, log_dir: str | None = None):
 
     @app.post("/demo/reset")
     async def reset(body: dict) -> dict:
-        fresh = BY_ID[body["scenario"]].world()
+        fresh = world_from_definition(body)
         for key, value in vars(fresh).items():
             setattr(world, key, value)
         return {"ok": True}
@@ -155,10 +155,10 @@ class Stack:
     def _base(self, name: str) -> str:
         return self.settings.entity(name)["endpoint"].removesuffix("/nlip")
 
-    def reset(self, scenario: str) -> None:
+    def reset(self, world_definition: dict) -> None:
         for name in AGENTS:
             self.http.post(f"{self._base(name)}/demo/reset",
-                           json={"scenario": scenario}).raise_for_status()
+                           json=world_definition).raise_for_status()
 
     def fetch(self) -> World:
         merged = World()

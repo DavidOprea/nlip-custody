@@ -82,11 +82,16 @@ From `config.toml`:
 
 ```toml
 [custody_guard.finance.policy.pay]
-allowed = ["user:*", "agent:acme/user-client", "agent:acme/assistant", "agent:fin/*"]
+allowed = ["user:*", "agent:acme/user-client", "agent:acme/assistant", "agent:fin/*", "agent:hr/*"]
 ```
 
-The inbox reader is deliberately **not** allowed to steer payments: what it returns
-is outside content.
+Other participating agents that run Custody (here HR) may be allowed: whatever
+influenced them travels with their token, so a poisoned HR would still show the
+email sender. The inbox reader is deliberately **not** allowed to steer payments:
+what it returns is outside content.
+
+The scenario format and the larger attack and benign sets are in
+[`adversarial_tests/custody_eval`](../../adversarial_tests/custody_eval/).
 
 ## Known simplifications (read before quoting numbers)
 

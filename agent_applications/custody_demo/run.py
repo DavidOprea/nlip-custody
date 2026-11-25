@@ -5,7 +5,8 @@
     python -m agent_applications.custody_demo.run --custody on    # only one setting
     python -m agent_applications.custody_demo.run --json out.json # machine-readable
 
-In-process mode needs no network, no model and no login, and is deterministic.
+In-process mode needs no network, no model and no login, and is deterministic. The
+evaluation (``adversarial_tests/custody_eval``) reuses :func:`run_scenarios`.
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ import asyncio
 import json
 import sys
 import tempfile
+import time
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -28,56 +31,85 @@ from .world import World
 class Result:
     scenario: str
     kind: str
-    custody: bool
+    category: str
+    defense: str          # "none" or "custody"
     goal_met: bool
-    blocked: list[str]
-    consents: int
+    blocked: list[str]    # tool calls blocked (agent.tool), before any consent
+    consents: int         # approvals the simulated user gave
+    seconds: float
     reply: str
+    expected: str | None
+
+    @property
+    def custody(self) -> bool:
+        return self.defense == "custody"
 
     @property
     def verdict(self) -> str:
+        """succeeds/stopped for attacks; done/consent/blocked/failed for benign."""
         if self.kind == "attack":
-            return "ATTACK WORKED" if self.goal_met else "stopped"
-        if not self.goal_met:
-            return "FAILED"
-        return "done (after consent)" if self.consents else "done"
+            return "succeeds" if self.goal_met else "stopped"
+        if self.goal_met:
+            return "consent" if self.consents else "done"
+        return "blocked" if self.blocked else "failed"
+
+    @property
+    def as_expected(self) -> bool:
+        return self.expected is None or self.expected == self.verdict
 
 
 async def run_one(
     scenario: Scenario, *, custody: bool, mode: Mode, log_dir: Path, stack=None
 ) -> Result:
-    """One scenario, one custody setting. ``stack`` is the running HTTP stack, if any."""
+    """One scenario under one defence. ``stack`` is the running HTTP stack, if any."""
+    started = time.perf_counter()
     if stack is not None:
-        stack.reset(scenario.id)
+        stack.reset(scenario.world_definition())
         settings, world = stack.settings, World()
     else:
         settings = DemoSettings(custody=custody, mode=mode, log_dir=log_dir)
         world = scenario.world()
     net = DemoNetwork(settings, world)
 
-    async def act() -> str:
-        if scenario.from_rogue_to:
-            return await net.rogue_says(scenario.from_rogue_to, scenario.prompt)
-        return await net.ask(scenario.prompt)
+    async def turn(text: str) -> str:
+        target = scenario.rogue_target
+        if target and scenario.special == "forged_token":
+            return await net.rogue_forged(target, text)
+        if target:
+            return await net.rogue_says(target, text)
+        return await net.ask(text)
 
-    reply = await act()
-    if stack is not None:
-        net.world = world = stack.fetch()
+    def refresh() -> World:
+        if stack is not None:
+            net.world = stack.fetch()
+        return net.world
+
+    reply = ""
+    for text in scenario.turns:
+        reply = await turn(text)
+    if scenario.special == "replay_user_request":
+        reply = await net.replay_user_request()
+    world = refresh()
     blocked = list(world.tool_blocks)
     consents = 0
-    if scenario.user_approves and world.consent_requests:
-        consents = net.approve_pending()
-        reply = await act()
-        if stack is not None:
-            world = stack.fetch()
-    return Result(scenario.id, scenario.kind, custody, scenario.goal(world, reply),
-                  blocked, consents, reply)
+    if scenario.approve is not None and world.consent_requests:
+        consents = net.approve_pending(scenario.wants)
+        if consents:
+            reply = await turn(scenario.turns[-1])
+            world = refresh()
+    defense = "custody" if custody else "none"
+    return Result(
+        scenario.id, scenario.kind, scenario.category, defense,
+        scenario.check(world, reply), blocked, consents,
+        round(time.perf_counter() - started, 4), reply, scenario.expect.get(defense),
+    )
 
 
-async def run(ids: list[str], settings: list[bool], mode: Mode, log_root: Path) -> list[Result]:
-    scenarios = [BY_ID[i] for i in ids] if ids else SCENARIOS
+async def run_scenarios(
+    scenarios: Sequence[Scenario], defenses: Sequence[bool], mode: Mode, log_root: Path
+) -> list[Result]:
     results = []
-    for custody in settings:
+    for custody in defenses:
         label = "custody_on" if custody else "custody_off"
         if mode == "http":
             from .serve import Stack
@@ -96,27 +128,38 @@ async def run(ids: list[str], settings: list[bool], mode: Mode, log_root: Path) 
     return sorted(results, key=lambda r: (order[r.scenario], r.custody))
 
 
-def print_table(results: list[Result], verbose: bool) -> None:
+async def run(ids: list[str], defenses: list[bool], mode: Mode, log_root: Path) -> list[Result]:
+    """The demo's own showcase scenarios."""
+    return await run_scenarios([BY_ID[i] for i in ids] if ids else SCENARIOS,
+                               defenses, mode, log_root)
+
+
+LABELS = {"succeeds": "ATTACK WORKED", "stopped": "stopped", "done": "done",
+          "consent": "done (after consent)", "blocked": "BLOCKED", "failed": "FAILED"}
+
+
+def print_table(results: list[Result], verbose: bool, titles: dict[str, str]) -> None:
     by_id: dict[str, dict[bool, Result]] = {}
     for r in results:
         by_id.setdefault(r.scenario, {})[r.custody] = r
-    print(f"{'id':<4} {'kind':<7} {'scenario':<58} {'custody off':<16} {'custody on'}")
-    print("-" * 112)
+    print(f"{'id':<5} {'kind':<7} {'scenario':<58} {'custody off':<16} {'custody on'}")
+    print("-" * 113)
     for sid, runs in by_id.items():
-        s = BY_ID[sid]
-        off = runs.get(False).verdict if False in runs else "-"
-        on = runs.get(True).verdict if True in runs else "-"
-        print(f"{sid:<4} {s.kind:<7} {s.title:<58} {off:<16} {on}")
+        first = next(iter(runs.values()))
+        cells = []
+        for custody in (False, True):
+            r = runs.get(custody)
+            cells.append("-" if r is None else LABELS[r.verdict] + ("" if r.as_expected else " (!)"))
+        print(f"{sid:<5} {first.kind:<7} {titles.get(sid, '')[:58]:<58} {cells[0]:<16} {cells[1]}")
         if verbose:
             for custody, r in runs.items():
                 label = "on " if custody else "off"
                 for line in r.reply.splitlines() or [""]:
-                    print(f"       [{label}] {line}")
+                    print(f"        [{label}] {line}")
                 if r.blocked:
-                    print(f"       [{label}] blocked tools: {', '.join(r.blocked)}")
-    on = [r for r in results if r.custody]
-    off = [r for r in results if not r.custody]
-    for label, group in (("custody off", off), ("custody on", on)):
+                    print(f"        [{label}] blocked tools: {', '.join(r.blocked)}")
+    for label, custody in (("custody off", False), ("custody on", True)):
+        group = [r for r in results if r.custody == custody]
         attacks = [r for r in group if r.kind == "attack"]
         benign = [r for r in group if r.kind == "benign"]
         if group:
@@ -125,6 +168,9 @@ def print_table(results: list[Result], verbose: bool) -> None:
                 f"benign done {sum(r.goal_met for r in benign)}/{len(benign)} "
                 f"({sum(1 for r in benign if r.consents)} needed consent)"
             )
+    unexpected = [r for r in results if not r.as_expected]
+    if unexpected:
+        print("unexpected: " + ", ".join(f"{r.scenario}/{r.defense}={r.verdict}" for r in unexpected))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -141,15 +187,14 @@ def main(argv: list[str] | None = None) -> int:
     unknown = [i for i in args.ids if i not in BY_ID]
     if unknown:
         parser.error(f"unknown scenario(s): {', '.join(unknown)}")
-    settings = {"on": [True], "off": [False], "both": [False, True]}[args.custody]
+    defenses = {"on": [True], "off": [False], "both": [False, True]}[args.custody]
     log_root = Path(args.logs) if args.logs else Path(tempfile.mkdtemp(prefix="custody_demo_"))
-    results = asyncio.run(run(args.ids, settings, args.mode, log_root))
-    print_table(results, args.verbose)
+    results = asyncio.run(run(args.ids, defenses, args.mode, log_root))
+    print_table(results, args.verbose, {s.id: s.title for s in SCENARIOS})
     print(f"decision logs: {log_root}")
     if args.json:
         Path(args.json).write_text(json.dumps([asdict(r) for r in results], indent=2))
-    failed = [r for r in results if r.custody and (r.goal_met == (r.kind == "attack"))]
-    return 1 if failed else 0
+    return 0 if all(r.as_expected for r in results) else 1
 
 
 if __name__ == "__main__":

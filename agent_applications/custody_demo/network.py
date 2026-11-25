@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import httpx
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from nlip_sdk import NLIPClient, NLIPMessage, NLIPServer
 from nlip_sdk.nlip_security_extensions import SecurityBlockedError
 
 from security_extensions.custody.consent import ConsentIssuer
+from security_extensions.custody.signer import CustodySigner
+from security_extensions.custody.token import message_digest
 from security_extensions.custody.keys import load_private_key
 from security_extensions.custody.store import custody_store, reset_custody_stores
 
@@ -32,6 +37,10 @@ class DemoNetwork:
         self.settings = settings
         self.world = world
         self.servers: dict[str, DemoAgent] = {}
+        # Last message each outside client put on the wire, and a post that bypasses
+        # that client's own security pipeline (for replay and forgery attacks).
+        self.captured: dict[str, tuple[str, NLIPMessage]] = {}
+        self.raw_post: dict[str, Callable] = {}
         if settings.mode == "inproc":
             for name, cls in AGENTS.items():
                 self.servers[name] = cls(name, settings, world)
@@ -50,6 +59,14 @@ class DemoNetwork:
             self._route(client)
         else:
             reuse_connections(client)
+        inner = client._post
+        self.raw_post[name] = inner
+
+        async def recording_post(destination: str, message: NLIPMessage) -> httpx.Response:
+            self.captured[name] = (destination, message.model_copy(deep=True))
+            return await inner(destination, message)
+
+        client._post = recording_post  # type: ignore[method-assign]
         return client
 
     def _route(self, client: NLIPClient) -> None:
@@ -83,8 +100,32 @@ class DemoNetwork:
             return f"(refused: {error.response.text})"
         return reply.extract_text(language=None) or ""
 
-    def approve_pending(self) -> int:
-        """Simulated user: approve every pending consent request, once each.
+    async def replay_user_request(self) -> str:
+        """Attack: re-send the user's last wire message, byte for byte."""
+        destination, message = self.captured["user"]
+        response = await self.raw_post["user"](destination, message)
+        if response.status_code != 200:
+            return f"(replay refused: {response.status_code})"
+        return NLIPMessage.model_validate(response.json()).extract_text(language=None) or ""
+
+    async def rogue_forged(self, destination: str, text: str) -> str:
+        """Attack: the rogue claims to be the assistant with a self-signed custody token."""
+        claimed = self.settings.identities["assistant"]
+        forger = CustodySigner(claimed, Ed25519PrivateKey.generate())
+        message = NLIPMessage.text(text)
+        aud = self.settings.identities.get(destination, f"agent:x/{destination}")
+        message.add_token(
+            forger.sign(aud, message_digest(message), [USER_PRINCIPAL, self.settings.user_identity]),
+            forger.subformat,
+        )
+        try:
+            reply = await self.rogue.send(destination, message)
+        except httpx.HTTPStatusError as error:
+            return f"(refused: {error.response.status_code})"
+        return reply.extract_text(language=None) or ""
+
+    def approve_pending(self, wants: Callable[[str, dict], bool] = lambda tool, args: True) -> int:
+        """Simulated user: approve the pending consent requests ``wants`` accepts.
 
         The user's own client signs each approval; the custody SE carries it down
         the chain on the retry. Returns the number of approvals.
@@ -94,7 +135,7 @@ class DemoNetwork:
         key = load_private_key(self.settings.keys_dir / key_filename(self.settings.user_identity))
         issuer = ConsentIssuer(self.settings.user_identity, USER_PRINCIPAL, key)
         store = custody_store(self.settings.user_identity)
-        requests = list(self.world.consent_requests)
+        requests = [r for r in self.world.consent_requests if wants(r.tool, r.args)]
         for request in requests:
             store.add_consent(None, issuer.approve(request.agent, request.tool, request.args))
         self.world.consent_requests.clear()

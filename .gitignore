@@ -13,3 +13,4 @@ build/
 agent_applications/custody_demo/keys/
 agent_applications/custody_demo/logs/
 keys/
+adversarial_tests/custody_eval/results/

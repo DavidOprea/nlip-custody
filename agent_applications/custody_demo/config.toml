@@ -123,14 +123,17 @@ log_path = "logs/inbox.jsonl"
 [custody_guard.inbox.sources.read_inbox]
 result_field = "from"
 
+# Other participating agents that run Custody may be allowed as influencers: whatever
+# influenced them travels with their token, so a poisoned HR still shows the email
+# sender. The inbox reader is excluded on purpose: its output is outside content.
 [custody_guard.finance]
 identity = "agent:fin/finance"
 log_path = "logs/finance.jsonl"
 [custody_guard.finance.policy.pay]
-allowed = ["user:*", "agent:acme/user-client", "agent:acme/assistant", "agent:fin/*"]
+allowed = ["user:*", "agent:acme/user-client", "agent:acme/assistant", "agent:fin/*", "agent:hr/*"]
 
 [custody_guard.hr]
 identity = "agent:hr/hr"
 log_path = "logs/hr.jsonl"
 [custody_guard.hr.policy.get_salary]
-allowed = ["user:*", "agent:acme/user-client", "agent:acme/assistant", "agent:hr/*"]
+allowed = ["user:*", "agent:acme/user-client", "agent:acme/assistant", "agent:hr/*", "agent:fin/*"]
