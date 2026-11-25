@@ -8,3 +8,8 @@ __pycache__/
 .pytest_cache/
 build/
 *.egg-info/
+
+# Custody demo: generated keys and decision logs
+agent_applications/custody_demo/keys/
+agent_applications/custody_demo/logs/
+keys/

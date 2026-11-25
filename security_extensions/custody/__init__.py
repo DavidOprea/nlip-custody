@@ -3,7 +3,6 @@
 from .consent import ConsentIssuer, ConsentVerifier, args_digest
 from .guard import CustodyToolBlocked, CustodyToolGuard, ToolDecision
 from .replay import ReplayCache
-from .signer import CustodySigner, RemoteSigner, SignerError
 from .token import (
     CustodyClaims,
     CustodyTokenError,
@@ -33,3 +32,15 @@ __all__ = [
     "strip_custody_tokens",
     "subformat_for",
 ]
+
+_SIGNER_NAMES = {"CustodySigner", "RemoteSigner", "SignerError"}
+
+
+def __getattr__(name: str):
+    # Imported lazily so `python -m security_extensions.custody.signer` does not find
+    # the signer module already loaded by this package (a runpy warning).
+    if name in _SIGNER_NAMES:
+        from . import signer
+
+        return getattr(signer, name)
+    raise AttributeError(name)

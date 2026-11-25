@@ -112,3 +112,9 @@ class DecisionLog:
         line = json.dumps(entry, sort_keys=True, default=sorted, ensure_ascii=False)
         with self._lock, self._path.open("a", encoding="utf-8") as handle:
             handle.write(line + "\n")
+
+
+def reset_custody_stores() -> None:
+    """Forget every agent's custody state (for tests and repeated demo runs)."""
+    with _STORES_LOCK:
+        _STORES.clear()

@@ -1,0 +1,136 @@
+# Custody demo: five agents in three organisations, plus an outside rogue agent.
+#
+#   acme  (the user's company): user client, assistant, inbox reader
+#   fin   (finance provider)  : finance  -- has the `pay` tool
+#   hr    (HR provider)       : hr       -- has the `get_salary` tool
+#   rogue (third party, runs no Custody): rogue
+#
+# Paths are relative to this file. Keys are generated on first run into ./keys/
+# (git-ignored). `key_file` is used in in-process mode; `signer` (a separate signer
+# process) in HTTP mode. The loader keeps exactly one of them.
+
+[custody]
+keys_dir = "keys"
+log_dir = "logs"
+
+# NLIP entity name -> custody identity, for every entity that runs Custody.
+[custody.identities]
+user = "agent:acme/user-client"
+assistant = "agent:acme/assistant"
+inbox = "agent:acme/inbox"
+finance = "agent:fin/finance"
+hr = "agent:hr/hr"
+
+# ---------------------------------------------------------------- entities
+
+[entities.user]
+role = "user_client"
+
+[entities.assistant]
+host = "127.0.0.1"
+port = 8101
+endpoint = "http://127.0.0.1:8101/nlip"
+[entities.assistant.security]
+ingress = ["custody_assistant"]
+egress = ["custody_assistant"]
+
+[entities.inbox]
+host = "127.0.0.1"
+port = 8102
+endpoint = "http://127.0.0.1:8102/nlip"
+[entities.inbox.security]
+ingress = ["custody_inbox"]
+egress = ["custody_inbox"]
+
+[entities.finance]
+host = "127.0.0.1"
+port = 8103
+endpoint = "http://127.0.0.1:8103/nlip"
+[entities.finance.security]
+ingress = ["custody_finance"]
+egress = ["custody_finance"]
+
+[entities.hr]
+host = "127.0.0.1"
+port = 8104
+endpoint = "http://127.0.0.1:8104/nlip"
+[entities.hr.security]
+ingress = ["custody_hr"]
+egress = ["custody_hr"]
+
+[entities.rogue]
+host = "127.0.0.1"
+port = 8105
+endpoint = "http://127.0.0.1:8105/nlip"
+# no security: the rogue agent does not run Custody
+
+[entities.user.security]
+ingress = ["custody_user"]
+egress = ["custody_user"]
+
+# ------------------------------------------------- NLIP security extensions
+# `peers` and `pinned_keys` are filled in by the loader from [custody.identities]
+# and keys/public.json.
+
+[security_extensions.custody_user]
+entrypoint = "security_extensions.custody.extension:CustodyExtension"
+[security_extensions.custody_user.options]
+identity = "agent:acme/user-client"
+origin_principals = ["user:h:alice"]
+key_file = "keys/agent_acme_user-client.pem"
+signer = "tcp:127.0.0.1:47100"
+log_path = "logs/user.jsonl"
+
+[security_extensions.custody_assistant]
+entrypoint = "security_extensions.custody.extension:CustodyExtension"
+[security_extensions.custody_assistant.options]
+identity = "agent:acme/assistant"
+key_file = "keys/agent_acme_assistant.pem"
+signer = "tcp:127.0.0.1:47101"
+log_path = "logs/assistant.jsonl"
+
+[security_extensions.custody_inbox]
+entrypoint = "security_extensions.custody.extension:CustodyExtension"
+[security_extensions.custody_inbox.options]
+identity = "agent:acme/inbox"
+key_file = "keys/agent_acme_inbox.pem"
+signer = "tcp:127.0.0.1:47102"
+log_path = "logs/inbox.jsonl"
+
+[security_extensions.custody_finance]
+entrypoint = "security_extensions.custody.extension:CustodyExtension"
+[security_extensions.custody_finance.options]
+identity = "agent:fin/finance"
+key_file = "keys/agent_fin_finance.pem"
+signer = "tcp:127.0.0.1:47103"
+log_path = "logs/finance.jsonl"
+
+[security_extensions.custody_hr]
+entrypoint = "security_extensions.custody.extension:CustodyExtension"
+[security_extensions.custody_hr.options]
+identity = "agent:hr/hr"
+key_file = "keys/agent_hr_hr.pem"
+signer = "tcp:127.0.0.1:47104"
+log_path = "logs/hr.jsonl"
+
+# ------------------------------------------------------- tool-call checks
+# `approvers` is filled in by the loader (the user client's public key).
+
+[custody_guard.inbox]
+identity = "agent:acme/inbox"
+principal_salt = "acme-demo-salt"
+log_path = "logs/inbox.jsonl"
+[custody_guard.inbox.sources.read_inbox]
+result_field = "from"
+
+[custody_guard.finance]
+identity = "agent:fin/finance"
+log_path = "logs/finance.jsonl"
+[custody_guard.finance.policy.pay]
+allowed = ["user:*", "agent:acme/user-client", "agent:acme/assistant", "agent:fin/*"]
+
+[custody_guard.hr]
+identity = "agent:hr/hr"
+log_path = "logs/hr.jsonl"
+[custody_guard.hr.policy.get_salary]
+allowed = ["user:*", "agent:acme/user-client", "agent:acme/assistant", "agent:hr/*"]
