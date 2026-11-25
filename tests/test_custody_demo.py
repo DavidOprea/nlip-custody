@@ -33,7 +33,7 @@ def test_custody_tokens_never_reach_replies(results) -> None:
 
 
 def _ports_free() -> bool:
-    for port in [*range(8101, 8106), *range(47100, 47105)]:
+    for port in [*range(8101, 8107), *range(47100, 47106)]:
         with socket.socket() as sock:
             if sock.connect_ex(("127.0.0.1", port)) == 0:
                 return False

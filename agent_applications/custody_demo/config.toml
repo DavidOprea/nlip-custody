@@ -18,6 +18,7 @@ log_dir = "logs"
 user = "agent:acme/user-client"
 assistant = "agent:acme/assistant"
 inbox = "agent:acme/inbox"
+reader = "agent:acme/reader"
 finance = "agent:fin/finance"
 hr = "agent:hr/hr"
 
@@ -57,6 +58,14 @@ endpoint = "http://127.0.0.1:8104/nlip"
 [entities.hr.security]
 ingress = ["custody_hr"]
 egress = ["custody_hr"]
+
+[entities.reader]
+host = "127.0.0.1"
+port = 8106
+endpoint = "http://127.0.0.1:8106/nlip"
+[entities.reader.security]
+ingress = ["custody_reader"]
+egress = ["custody_reader"]
 
 [entities.rogue]
 host = "127.0.0.1"
@@ -113,6 +122,35 @@ key_file = "keys/agent_hr_hr.pem"
 signer = "tcp:127.0.0.1:47104"
 log_path = "logs/hr.jsonl"
 
+# The sandboxed reader: reads the inbox, calls nobody, returns typed JSON only. Its SE
+# endorses a reply that validates against this schema and fills no authority field.
+[security_extensions.custody_reader]
+entrypoint = "security_extensions.custody.endorse:EndorsingCustodyExtension"
+[security_extensions.custody_reader.options]
+identity = "agent:acme/reader"
+key_file = "keys/agent_acme_reader.pem"
+signer = "tcp:127.0.0.1:47105"
+log_path = "logs/reader.jsonl"
+[security_extensions.custody_reader.options.endorse]
+authority_fields = ["invoice"]
+[security_extensions.custody_reader.options.endorse.schema]
+type = "object"
+additionalProperties = false
+required = ["messages", "from_known_contacts", "has_invoice", "urgent", "invoice"]
+[security_extensions.custody_reader.options.endorse.schema.properties]
+messages = { type = "integer", minimum = 0, maximum = 1000 }
+from_known_contacts = { type = "integer", minimum = 0, maximum = 1000 }
+has_invoice = { type = "boolean" }
+urgent = { type = "boolean" }
+[security_extensions.custody_reader.options.endorse.schema.properties.invoice]
+type = ["object", "null"]
+additionalProperties = false
+required = ["payee", "account", "amount"]
+[security_extensions.custody_reader.options.endorse.schema.properties.invoice.properties]
+payee = { type = "string", pattern = "[a-z0-9.-]{1,40}" }
+account = { type = "string", pattern = "[0-9]{1,12}" }
+amount = { type = "integer", minimum = 0, maximum = 1000000 }
+
 # ------------------------------------------------------- tool-call checks
 # `approvers` is filled in by the loader (the user client's public key).
 
@@ -128,6 +166,13 @@ namespace = "memory"
 reads = "key"
 namespace = "memory"
 
+[custody_guard.reader]
+identity = "agent:acme/reader"
+principal_salt = "acme-demo-salt"
+log_path = "logs/reader.jsonl"
+[custody_guard.reader.sources.read_inbox]
+result_field = "from"
+
 [custody_guard.inbox]
 identity = "agent:acme/inbox"
 principal_salt = "acme-demo-salt"
@@ -138,17 +183,19 @@ result_field = "from"
 # Other participating agents that run Custody may be allowed as influencers: whatever
 # influenced them travels with their token, so a poisoned HR still shows the email
 # sender. The inbox reader is excluded on purpose: its output is outside content.
+# The sandboxed reader is allowed as an endorser: a reply it cannot endorse still
+# carries the mail senders.
 [custody_guard.finance]
 identity = "agent:fin/finance"
 log_path = "logs/finance.jsonl"
 [custody_guard.finance.policy.pay]
-allowed = ["user:*", "agent:acme/user-client", "agent:acme/assistant", "agent:fin/*", "agent:hr/*"]
+allowed = ["user:*", "agent:acme/user-client", "agent:acme/assistant", "agent:acme/reader", "agent:fin/*", "agent:hr/*"]
 
 [custody_guard.hr]
 identity = "agent:hr/hr"
 log_path = "logs/hr.jsonl"
 [custody_guard.hr.policy.get_salary]
-allowed = ["user:*", "agent:acme/user-client", "agent:acme/assistant", "agent:hr/*", "agent:fin/*"]
+allowed = ["user:*", "agent:acme/user-client", "agent:acme/assistant", "agent:acme/reader", "agent:hr/*", "agent:fin/*"]
 
 # ------------------------------------------------------------ baselines
 # Used only when the runner selects that defence (see settings.py). Each one reuses

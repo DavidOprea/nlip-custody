@@ -37,7 +37,8 @@ from agent_applications.custody_demo.settings import DEFENSES
 
 HERE = Path(__file__).resolve().parent
 # Default order of columns. judge_llm calls the Anthropic API, so it runs only on request.
-DEFAULT_DEFENSES = ["none", "judge_heuristic", "per_hop", "authority", "custody_nostorage", "custody"]
+DEFAULT_DEFENSES = ["none", "judge_heuristic", "per_hop", "authority", "custody_nostorage",
+                    "custody_noendorse", "custody"]
 
 
 def load(path: Path) -> list[Scenario]:

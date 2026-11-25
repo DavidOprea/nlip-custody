@@ -245,6 +245,7 @@ class CustodyExtension(SecurityExtension):
         else:
             added = {claims.iss}
         total = self.store.add(event.scope, added)
+        self._merged(event, added)
         self._record(
             event,
             "merge",
@@ -254,6 +255,15 @@ class CustodyExtension(SecurityExtension):
             reason=error,
         )
         return None, claims
+
+    def _merged(self, event: SecurityEvent, added: set[str]) -> None:
+        """Hook: principals just merged into ``event.scope`` from a peer (or unknown)."""
+
+    def _reply_principals(self, event: SecurityEvent) -> tuple[frozenset[str], str | None]:
+        """Hook: the principal set a reply token carries, and a log note."""
+        if not self._propagate:
+            return frozenset(), None
+        return self.store.principals(event.scope), None
 
     async def _server_ingress(self, event: SecurityEvent) -> SecurityDecision:
         blocked, claims = await self._merge_inbound(event, expected_issuer=None)
@@ -277,11 +287,11 @@ class CustodyExtension(SecurityExtension):
         if caller is None:
             self._record(event, "unsigned", reason="caller sent no custody token")
             return SecurityDecision.allow()
-        principals = self.store.principals(event.scope) if self._propagate else frozenset()
+        principals, note = self._reply_principals(event)
         signed = await self._sign(event.message, caller, principals)
         requests = await self._attach_requests(signed, event.scope)
         self._record(event, "sign", aud=caller, principals=sorted(principals),
-                     consent_requests=requests)
+                     consent_requests=requests, **({"endorsement": note} if note else {}))
         return SecurityDecision.replace(signed, "custody token attached")
 
     async def _attach_requests(self, message: NLIPMessage, scope: str | None) -> int:

@@ -189,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--custody", choices=["on", "off", "both"], default="both")
     parser.add_argument("--mode", choices=["inproc", "http"], default="inproc",
                         help="http: every agent and signer in its own process "
-                             "(ports 8101-8105 and 47100-47104)")
+                             "(ports 8101-8106 and 47100-47105)")
     parser.add_argument("--logs", help="directory for decision logs (default: a temp dir)")
     parser.add_argument("--json", help="write results as JSON to this file")
     parser.add_argument("-v", "--verbose", action="store_true", help="show replies")

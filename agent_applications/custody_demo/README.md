@@ -1,4 +1,4 @@
-# Custody demo: five agents, three organisations, one rogue
+# Custody demo: six agents, three organisations, one rogue
 
 A runnable NLIP application for the Custody security extension. Each agent is a real
 `NLIPServer` (and `NLIPClient` where it calls others) whose security pipelines are
@@ -9,6 +9,7 @@ loaded by the framework from [`config.toml`](config.toml).
 | `user`      | `agent:acme/user-client` | acme  | The human's client (Type-1). Signs consent.            |
 | `assistant` | `agent:acme/assistant`   | acme  | Takes user requests, calls the other agents; has a memory (`remember`/`recall`) that outlives conversations, with authors tracked. |
 | `inbox`     | `agent:acme/inbox`       | acme  | Reads the mailbox (`read_inbox`, tagged by sender).    |
+| `reader`    | `agent:acme/reader`      | acme  | Sandboxed inbox reader: calls nobody, returns typed JSON only; its SE endorses control-only replies. |
 | `finance`   | `agent:fin/finance`      | fin   | `pay` tool, guarded.                                   |
 | `hr`        | `agent:hr/hr`            | hr    | `get_salary` tool, guarded.                            |
 | `rogue`     | none                     | —     | Third-party agent that runs no Custody.                |
@@ -50,8 +51,8 @@ logs (JSON lines, one file per agent) go to a temporary directory, or to `--logs
   each server's `process_exchange`, so every security pipeline runs as it would over
   HTTP, without sockets. Keys are loaded in-process (`key_file`), which is fine for
   a demo but not the threat model.
-* `http`: one uvicorn process per agent (ports 8101–8105) and one custody signer
-  process per identity (ports 47100–47104). Each signer has its own random authkey,
+* `http`: one uvicorn process per agent (ports 8101–8106) and one custody signer
+  process per identity (ports 47100–47105). Each signer has its own random authkey,
   and each agent gets only its own signer's authkey, so no agent process can read a
   private key or sign as another agent. Each agent also serves `/demo/reset` and
   `/demo/world` so the runner can load a scenario and read the outcome. These two
