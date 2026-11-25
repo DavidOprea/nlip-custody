@@ -1,0 +1,93 @@
+"""Per-task custody sets shared by the NLIP SE and the agent's tool hooks.
+
+A *scope* is a causal context: the inbound server session id that started the task
+(the same string ``NLIPClient.send(..., scope=...)`` uses for outbound calls it
+causes). ``None`` is the default scope of an originating client with no inbound
+session, e.g. the user's own chat client.
+
+The NLIP SE and the tool hooks (PreToolUse/PostToolUse, LangChain wrappers) of one
+agent must use the same store. Look it up by the agent's custody identity::
+
+    store = custody_store("agent:fin/finance")
+"""
+
+from __future__ import annotations
+
+import json
+import threading
+import time
+from collections import OrderedDict
+from collections.abc import Iterable
+from pathlib import Path
+from typing import Any
+
+from .token import validate_principal
+
+UNKNOWN = "unknown"
+
+
+class CustodyStore:
+    """Bounded map ``scope -> set of principals``; principals are only ever added."""
+
+    def __init__(self, max_scopes: int = 10_000) -> None:
+        self._max = max_scopes
+        self._sets: OrderedDict[str | None, set[str]] = OrderedDict()
+        self._callers: dict[str | None, str | None] = {}
+        self._lock = threading.Lock()
+
+    def add(self, scope: str | None, principals: Iterable[str]) -> frozenset[str]:
+        new = {validate_principal(p) for p in principals}
+        with self._lock:
+            current = self._sets.setdefault(scope, set())
+            current |= new
+            self._sets.move_to_end(scope)
+            while len(self._sets) > self._max:
+                old, _ = self._sets.popitem(last=False)
+                self._callers.pop(old, None)
+            return frozenset(current)
+
+    def principals(self, scope: str | None) -> frozenset[str]:
+        with self._lock:
+            return frozenset(self._sets.get(scope, ()))
+
+    def set_caller(self, scope: str | None, caller: str | None) -> None:
+        """Remember who sent the current inbound turn, to address the reply."""
+        with self._lock:
+            self._callers[scope] = caller
+
+    def caller(self, scope: str | None) -> str | None:
+        with self._lock:
+            return self._callers.get(scope)
+
+    def clear(self, scope: str | None) -> None:
+        with self._lock:
+            self._sets.pop(scope, None)
+            self._callers.pop(scope, None)
+
+
+_STORES: dict[str, CustodyStore] = {}
+_STORES_LOCK = threading.Lock()
+
+
+def custody_store(identity: str) -> CustodyStore:
+    """The process-wide store for one agent identity (created on first use)."""
+    with _STORES_LOCK:
+        return _STORES.setdefault(identity, CustodyStore())
+
+
+class DecisionLog:
+    """Append-only JSON-lines log of custody decisions (no hash chain, by design)."""
+
+    def __init__(self, path: str | Path | None) -> None:
+        self._path = Path(path) if path else None
+        self._lock = threading.Lock()
+        if self._path is not None:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+
+    def write(self, **entry: Any) -> None:
+        if self._path is None:
+            return
+        entry = {"ts": round(time.time(), 3), **entry}
+        line = json.dumps(entry, sort_keys=True, default=sorted, ensure_ascii=False)
+        with self._lock, self._path.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
