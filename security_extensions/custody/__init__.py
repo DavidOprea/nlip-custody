@@ -1,5 +1,7 @@
 """Custody: boundary-computed influence provenance carried across NLIP agents."""
 
+from .consent import ConsentIssuer, ConsentVerifier, args_digest
+from .guard import CustodyToolBlocked, CustodyToolGuard, ToolDecision
 from .replay import ReplayCache
 from .signer import CustodySigner, RemoteSigner, SignerError
 from .token import (
@@ -13,6 +15,12 @@ from .token import (
 )
 
 __all__ = [
+    "ConsentIssuer",
+    "ConsentVerifier",
+    "CustodyToolBlocked",
+    "CustodyToolGuard",
+    "ToolDecision",
+    "args_digest",
     "CustodyClaims",
     "CustodySigner",
     "CustodyTokenError",

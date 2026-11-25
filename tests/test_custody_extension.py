@@ -20,59 +20,18 @@ from security_extensions.custody.keys import generate_private_key, public_key_b6
 from security_extensions.custody.store import CustodyStore
 from security_extensions.custody.token import is_custody_subformat
 
-USER_CLIENT = "agent:acme/user-client"
-ASSISTANT = "agent:acme/assistant"
-FINANCE = "agent:fin/finance"
-ROGUE = "agent:evil/rogue"
-ALICE = "user:h:alice"
-SUPPLIER = "external:h:supp1ier"
-
-KEYS = {name: Ed25519PrivateKey.generate() for name in (USER_CLIENT, ASSISTANT, FINANCE, ROGUE)}
-
-
-def custody(identity: str, *, pinned: list[str], peers=None, **options) -> CustodyExtension:
-    return CustodyExtension(
-        identity,
-        signer=CustodySigner(identity, KEYS[identity]),
-        pinned_keys={name: KEYS[name].public_key() for name in pinned},
-        peers=peers or {},
-        store=CustodyStore(),
-        **options,
-    )
-
-
-def manager(entity: str, extension: CustodyExtension | None) -> SecurityExtensionManager:
-    m = SecurityExtensionManager(entity)
-    if extension is not None:
-        m.register("custody", extension, list(EnforcementPoint))
-    return m
-
-
-class Network:
-    """Routes NLIPClient posts straight into NLIPServer.process_exchange."""
-
-    def __init__(self) -> None:
-        self.servers: dict[str, NLIPServer] = {}
-        self.wire: list[tuple[str, NLIPMessage]] = []
-
-    def client(self, identity: str, security: SecurityExtensionManager) -> NLIPClient:
-        client = NLIPClient(
-            {name: f"http://{name}.test/nlip" for name in self.servers},
-            identity=identity,
-            security=security,
-        )
-
-        async def post(destination: str, message: NLIPMessage) -> httpx.Response:
-            self.wire.append((destination, message.model_copy(deep=True)))
-            request = httpx.Request("POST", client.endpoints[destination])
-            try:
-                reply = await self.servers[destination].process_exchange(message)
-            except SecurityBlockedError as error:
-                return httpx.Response(403, json={"detail": str(error)}, request=request)
-            return httpx.Response(200, json=reply.to_dict(), request=request)
-
-        client._post = post  # type: ignore[method-assign]
-        return client
+from custody_harness import (  # noqa: E402
+    ALICE,
+    ASSISTANT,
+    FINANCE,
+    KEYS,
+    ROGUE,
+    SUPPLIER,
+    USER_CLIENT,
+    Network,
+    custody,
+    manager,
+)
 
 
 class Finance(NLIPServer):

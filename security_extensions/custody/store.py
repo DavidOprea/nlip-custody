@@ -33,6 +33,8 @@ class CustodyStore:
         self._max = max_scopes
         self._sets: OrderedDict[str | None, set[str]] = OrderedDict()
         self._callers: dict[str | None, str | None] = {}
+        # Consent tokens seen in this task: opaque here, verified by the tool guard.
+        self._consents: dict[str | None, list[str]] = {}
         self._lock = threading.Lock()
 
     def add(self, scope: str | None, principals: Iterable[str]) -> frozenset[str]:
@@ -44,6 +46,7 @@ class CustodyStore:
             while len(self._sets) > self._max:
                 old, _ = self._sets.popitem(last=False)
                 self._callers.pop(old, None)
+                self._consents.pop(old, None)
             return frozenset(current)
 
     def principals(self, scope: str | None) -> frozenset[str]:
@@ -59,10 +62,28 @@ class CustodyStore:
         with self._lock:
             return self._callers.get(scope)
 
+    def add_consent(self, scope: str | None, token: str, *, max_per_scope: int = 32) -> None:
+        with self._lock:
+            pool = self._consents.setdefault(scope, [])
+            if token not in pool:
+                pool.append(token)
+                del pool[:-max_per_scope]
+
+    def consents(self, scope: str | None) -> tuple[str, ...]:
+        with self._lock:
+            return tuple(self._consents.get(scope, ()))
+
+    def discard_consent(self, scope: str | None, token: str) -> None:
+        with self._lock:
+            pool = self._consents.get(scope)
+            if pool and token in pool:
+                pool.remove(token)
+
     def clear(self, scope: str | None) -> None:
         with self._lock:
             self._sets.pop(scope, None)
             self._callers.pop(scope, None)
+            self._consents.pop(scope, None)
 
 
 _STORES: dict[str, CustodyStore] = {}

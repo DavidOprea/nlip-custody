@@ -52,6 +52,7 @@ from nlip_sdk.nlip_security_extensions import (
     SecurityExtension,
 )
 
+from .consent import consent_subformat, decode_consent_unverified, is_consent_subformat
 from .keys import load_private_key, load_public_key
 from .replay import ReplayCache
 from .signer import CustodySigner, RemoteSigner, Signer, SignerError
@@ -63,14 +64,37 @@ from .token import (
     agent_org,
     is_custody_subformat,
     message_digest,
-    strip_custody_tokens,
     subformat_for,
     validate_principal,
 )
 
 
+def _is_ours(subformat: str) -> bool:
+    return is_custody_subformat(subformat) or is_consent_subformat(subformat)
+
+
 def _has_custody_token(message: NLIPMessage) -> bool:
-    return any(is_custody_subformat(t.subformat) for t in message.token_submessages())
+    return any(_is_ours(t.subformat) for t in message.token_submessages())
+
+
+def _strip(message: NLIPMessage) -> NLIPMessage:
+    """Remove custody and consent token parts (they never reach models or storage)."""
+    cleaned = message.model_copy(deep=True)
+    if cleaned.submessages:
+        kept = [
+            p for p in cleaned.submessages
+            if not (p.format == "token" and _is_ours(p.subformat))
+        ]
+        cleaned.submessages = kept or None
+    return cleaned
+
+
+def _consent_tokens(message: NLIPMessage) -> list[str]:
+    return [
+        str(t.content)
+        for t in message.token_submessages()
+        if is_consent_subformat(t.subformat)
+    ]
 
 
 class CustodyExtension(SecurityExtension):
@@ -150,7 +174,7 @@ class CustodyExtension(SecurityExtension):
 
     async def _sign(self, message: NLIPMessage, aud: str, principals: Collection[str]) -> NLIPMessage:
         """Return ``message`` without stray custody tokens, plus one fresh token."""
-        out = strip_custody_tokens(message)
+        out = _strip(message)
         signer = self._get_signer()
         args = (aud, message_digest(out), sorted(principals))
         if isinstance(signer, RemoteSigner):
@@ -215,6 +239,9 @@ class CustodyExtension(SecurityExtension):
         blocked, claims = await self._merge_inbound(event, expected_issuer=None)
         if blocked is not None:
             return blocked
+        for token in _consent_tokens(event.message):
+            # Opaque here; the tool guard verifies audience, call and signature.
+            self.store.add_consent(event.scope, token)
         caller = claims.iss if claims else None
         self.store.set_caller(event.scope, caller)
         if caller is not None and event.session.peer is None:
@@ -222,9 +249,7 @@ class CustodyExtension(SecurityExtension):
             # token is the first trustworthy caller identity this session has.
             event.session.peer = caller
         if _has_custody_token(event.message):
-            return SecurityDecision.replace(
-                strip_custody_tokens(event.message), "custody tokens removed"
-            )
+            return SecurityDecision.replace(_strip(event.message), "custody tokens removed")
         return SecurityDecision.allow()
 
     async def _server_egress(self, event: SecurityEvent) -> SecurityDecision:
@@ -250,7 +275,16 @@ class CustodyExtension(SecurityExtension):
         else:
             principals = self.store.principals(event.scope)
         signed = await self._sign(event.message, aud, principals)
-        self._record(event, "sign", aud=aud, principals=sorted(principals))
+        consents = self.store.consents(event.scope)
+        for token in consents:
+            try:
+                issuer = decode_consent_unverified(token)[0].iss
+            except CustodyTokenError:
+                continue
+            signed.add_token(token, consent_subformat(issuer))
+        self._record(
+            event, "sign", aud=aud, principals=sorted(principals), consents=len(consents)
+        )
         return SecurityDecision.replace(signed, "custody token attached")
 
     async def _client_ingress(self, event: SecurityEvent) -> SecurityDecision:
@@ -259,7 +293,5 @@ class CustodyExtension(SecurityExtension):
         if blocked is not None:
             return blocked
         if _has_custody_token(event.message):
-            return SecurityDecision.replace(
-                strip_custody_tokens(event.message), "custody tokens removed"
-            )
+            return SecurityDecision.replace(_strip(event.message), "custody tokens removed")
         return SecurityDecision.allow()
