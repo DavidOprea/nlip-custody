@@ -116,6 +116,18 @@ log_path = "logs/hr.jsonl"
 # ------------------------------------------------------- tool-call checks
 # `approvers` is filled in by the loader (the user client's public key).
 
+# The assistant's memory outlives conversations: what a task writes keeps that task's
+# principals as its authors, and a later task that reads it inherits them.
+[custody_guard.assistant]
+identity = "agent:acme/assistant"
+log_path = "logs/assistant.jsonl"
+[custody_guard.assistant.storage.remember]
+writes = "key"
+namespace = "memory"
+[custody_guard.assistant.storage.recall]
+reads = "key"
+namespace = "memory"
+
 [custody_guard.inbox]
 identity = "agent:acme/inbox"
 principal_salt = "acme-demo-salt"

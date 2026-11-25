@@ -37,6 +37,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from .consent import ConsentVerifier, args_digest
 from .keys import load_public_key
+from .authors import author_store
 from .replay import ReplayCache
 from .store import UNKNOWN, CustodyStore, DecisionLog, custody_store
 from .token import CustodyTokenError, agent_org, hash_principal, validate_principal
@@ -104,6 +105,9 @@ class CustodyToolGuard:
         policy: Mapping[str, Mapping[str, Any]],
         *,
         sources: Mapping[str, Mapping[str, Any]] | None = None,
+        storage: Mapping[str, Mapping[str, Any]] | None = None,
+        track_storage: bool = True,
+        authors_path: str | None = None,
         approvers: Mapping[str, str | Ed25519PublicKey] | None = None,
         principal_salt: str | bytes = b"",
         log_path: str | None = None,
@@ -125,6 +129,19 @@ class CustodyToolGuard:
             tool: SourceRule(tuple(rule.get("principals", ())), rule.get("result_field"))
             for tool, rule in (sources or {}).items()
         }
+        self._storage: dict[str, dict[str, str]] = {}
+        for tool, rule in (storage or {}).items():
+            ops = [op for op in ("writes", "reads") if op in rule]
+            if len(ops) != 1 or not isinstance(rule[ops[0]], str):
+                raise ValueError(f"storage.{tool} needs exactly one of writes/reads = <arg name>.")
+            mode = rule.get("mode", "replace")
+            if mode not in {"replace", "append"}:
+                raise ValueError(f"storage.{tool}.mode must be replace or append.")
+            self._storage[tool] = {"op": ops[0], "arg": rule[ops[0]],
+                                   "namespace": rule.get("namespace", "store"), "mode": mode}
+        # track_storage=False is the "no storage tracking" ablation.
+        self.track_storage = track_storage
+        self.authors = author_store(identity, authors_path)
         self._salt = principal_salt.encode() if isinstance(principal_salt, str) else principal_salt
         keys = {
             name: key if isinstance(key, Ed25519PublicKey) else load_public_key(key)
@@ -208,16 +225,37 @@ class CustodyToolGuard:
     def tag(
         self, scope: str | None, tool: str, args: Mapping[str, Any], result: Any
     ) -> frozenset[str]:
-        """Add the principals behind a tool's result to the task (PostToolUse)."""
+        """Add the principals behind a tool's result to the task (PostToolUse).
+
+        Source tools add the authors of outside content. Storage tools record the
+        task's principals on what they write, and add back the recorded authors of
+        what they read (see :mod:`.authors`).
+        """
+        added: set[str] = set()
         rule = self._sources.get(tool)
-        if rule is None:
+        if rule is not None:
+            added |= set(rule.principals)
+            if rule.result_field:
+                values = _field_values(result, rule.result_field)
+                added |= {hash_principal("external", v.strip().casefold(), self._salt)
+                          for v in values}
+                if not values:
+                    added.add(UNKNOWN)  # a source tool whose authors we cannot name
+        storage = self._storage.get(tool) if self.track_storage else None
+        if storage is not None:
+            obj = f"{storage['namespace']}:{args.get(storage['arg'])}"
+            if storage["op"] == "writes":
+                authors = self.authors.record(obj, self.store.principals(scope), mode=storage["mode"])
+                self.log.write(identity=self.identity, point="tool_result", scope=scope, tool=tool,
+                               action="record_authors", object=obj, authors=sorted(authors))
+            else:
+                authors = self.authors.authors(obj)
+                if authors is not None:
+                    added |= authors
+                elif result not in (None, "", [], {}):
+                    added.add(UNKNOWN)  # stored by something Custody did not see
+        if rule is None and not added:
             return frozenset()
-        added = set(rule.principals)
-        if rule.result_field:
-            values = _field_values(result, rule.result_field)
-            added |= {hash_principal("external", v.strip().casefold(), self._salt) for v in values}
-            if not values:
-                added.add(UNKNOWN)  # a source tool whose authors we cannot name
         total = self.store.add(scope, added)
         self.log.write(identity=self.identity, point="tool_result", scope=scope, tool=tool,
                        action="tag", added=sorted(added), principals=sorted(total))

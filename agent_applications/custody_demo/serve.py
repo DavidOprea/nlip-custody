@@ -48,6 +48,8 @@ def build_app(name: str, defense: str, log_dir: str | None = None):
         fresh = world_from_definition(body)
         for key, value in vars(fresh).items():
             setattr(world, key, value)
+        if agent.guard is not None:
+            agent.guard.authors.clear()  # stored-object authors belong to the old world
         return {"ok": True}
 
     @app.get("/demo/world")

@@ -61,6 +61,13 @@ def _decoded(text: str, role: str) -> str:
     return "\n".join(lines)
 
 
+def _only_role_lines(text: str, role: str) -> str:
+    """``remember`` instructions addressed to ``role``, as plain ``remember ...`` lines."""
+    decoded = text + "\n" + _decoded(text, role)
+    return "\n".join(m.group(1) for m in re.finditer(rf"{role}:\s*(remember .+?)(?:\n|$)",
+                                                      decoded, re.I))
+
+
 def injections(text: str, role: str) -> list[tuple[str, str, str | None]]:
     """Find ``ROLE: ask <dest> to <request> [and forward it to <dest>]`` lines."""
     found = []
@@ -146,13 +153,46 @@ class DemoAgent(NLIPServer):
         raise NotImplementedError
 
 
+REMEMBER = re.compile(r"remember ([\w-]+)\s*=\s*(.+?)\.?\s*(?:\n|$)", re.I)
+
+
 class Assistant(DemoAgent):
+    """Also has a memory that outlives conversations: ``remember`` and ``recall``."""
+
     calls_others = True
+
+    async def remember(self, key: str, value: str, session: NLIPSession) -> str:
+        async def remember(key: str, value: str) -> str:
+            self.world.memory[key] = value
+            return f"Noted {key}."
+
+        return await self.tool("remember", remember, session)(key=key, value=value)
+
+    async def recall(self, key: str, session: NLIPSession) -> str:
+        async def recall(key: str) -> str:
+            return self.world.memory.get(key, "")
+
+        return await self.tool("recall", recall, session)(key=key)
+
+    async def follow(self, role: str, text: str, session: NLIPSession, depth: int = 0) -> list[str]:
+        out = []
+        # Worst case also for memory: obey "ASSISTANT: remember <key> = <value>".
+        for key, value in REMEMBER.findall(_only_role_lines(text, role)):
+            out.append(await self.remember(key, value, session))
+        return out + await super().follow(role, text, session, depth)
 
     async def script(self, text: str, session: NLIPSession) -> str:
         parts: list[str] = []
         lowered = text.casefold()
-        if "invoice" in lowered and "inbox" in lowered:
+        if lowered.startswith("remember ") and (m := REMEMBER.match(text)) is not None:
+            parts.append(await self.remember(m.group(1), m.group(2), session))
+        elif "standing order" in lowered:
+            order = await self.recall("standing-order", session)
+            if (m := PAY.search(order)) is not None:
+                parts.append(await self.send("finance", m.group(0), session))
+            else:
+                parts.append("You have no standing orders.")
+        elif "invoice" in lowered and "inbox" in lowered:
             inbox = await self.send("inbox", "summarise my inbox", session)
             parts.append(inbox)
             for amount, account, payee in INVOICE.findall(inbox):

@@ -13,6 +13,7 @@ The ``defense`` picks what runs, all built from the same ``config.toml``:
 
 * ``none``: every security pipeline and tool guard removed (baseline 1);
 * ``custody``: the custody SE plus the tool guards (the contribution);
+* ``custody_nostorage``: the same without storage-author tracking (ablation);
 * ``per_hop``: the same SEs with no propagation, plus the Rule of Two (baseline 3);
 * ``authority``: sender tokens plus warrant caps at the tools (baseline 4);
 * ``judge_heuristic`` / ``judge_llm``: a content judge at every door (baseline 2).
@@ -38,9 +39,11 @@ from security_extensions.custody.store import CustodyStore
 APP_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = APP_DIR / "config.toml"
 Mode = Literal["inproc", "http"]
-Defense = Literal["none", "custody", "per_hop", "authority", "judge_heuristic", "judge_llm"]
+Defense = Literal["none", "custody", "custody_nostorage", "per_hop", "authority",
+                  "judge_heuristic", "judge_llm"]
 DEFENSES: tuple[str, ...] = (
-    "none", "judge_heuristic", "judge_llm", "per_hop", "authority", "custody",
+    "none", "judge_heuristic", "judge_llm", "per_hop", "authority", "custody_nostorage",
+    "custody",
 )
 
 
@@ -92,12 +95,12 @@ class DemoSettings:
     @property
     def custody(self) -> bool:
         """Signed sender tokens and a per-task store (custody and the token baselines)."""
-        return self.defense in {"custody", "per_hop", "authority"}
+        return self.defense in {"custody", "custody_nostorage", "per_hop", "authority"}
 
     @property
     def consent(self) -> bool:
         """Whether a blocked call can be released by the user's one-time consent."""
-        return self.defense in {"custody", "per_hop"}
+        return self.defense in {"custody", "custody_nostorage", "per_hop"}
 
     @property
     def signers(self) -> bool:
@@ -155,9 +158,13 @@ class DemoSettings:
         return config
 
     def _guards(self, raw: dict[str, Any]) -> dict[str, tuple[type, dict[str, Any]]]:
-        if self.defense in {"custody", "per_hop"}:
-            return {name: (CustodyToolGuard, self._guard_options(opts))
-                    for name, opts in raw.get("custody_guard", {}).items()}
+        if self.defense in {"custody", "custody_nostorage", "per_hop"}:
+            guards = {name: (CustodyToolGuard, self._guard_options(opts))
+                      for name, opts in raw.get("custody_guard", {}).items()}
+            if self.defense == "custody_nostorage":
+                for _, opts in guards.values():
+                    opts["track_storage"] = False
+            return guards
         if self.defense == "authority":
             from security_extensions.baselines.authority import AuthorityGuard
 

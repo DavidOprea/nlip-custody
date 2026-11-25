@@ -31,6 +31,7 @@ class World:
     salary_reads: list[str] = field(default_factory=list)
     rogue_received: list[str] = field(default_factory=list)
     tool_blocks: list[str] = field(default_factory=list)
+    memory: dict[str, str] = field(default_factory=dict)  # the assistant's memory
 
     def paid(self, account: str) -> bool:
         return any(p.account == account for p in self.ledger)

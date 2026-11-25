@@ -91,6 +91,14 @@ class DemoNetwork:
 
     # ------------------------------------------------------------ user side
 
+    def new_conversation(self) -> None:
+        """The user starts a new conversation with the assistant (fresh session).
+
+        Every custody set is per conversation, so the new one starts clean. Anything
+        that carries over does so through storage: the assistant's memory.
+        """
+        self.user._sessions.clear()  # noqa: SLF001 - the demo user client's own sessions
+
     async def ask(self, text: str) -> str:
         """The user types ``text`` to their assistant (one conversation per network)."""
         try:

@@ -7,7 +7,8 @@ one format and one runner.
 Fields
 ------
 id, kind ("benign" | "attack"), category, title
-turns       user messages to the assistant, in one conversation
+turns       user messages to the assistant, in one conversation; a turn that is
+            exactly "/new" starts a new conversation (new session, new scope)
 actor       "user" (default) or "rogue:<entity>": the rogue agent sends ``turns``
             straight to that entity instead
 mailbox     list of {"from", "subject", "body"}
@@ -39,6 +40,8 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from .world import Mail, World
+
+NEW_CONVERSATION = "/new"
 
 
 @dataclass(frozen=True)

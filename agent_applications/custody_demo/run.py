@@ -22,7 +22,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .network import DemoNetwork
-from .scenarios import BY_ID, SCENARIOS, Scenario
+from .scenarios import BY_ID, NEW_CONVERSATION, SCENARIOS, Scenario
 from .settings import DemoSettings, Mode
 from .world import World
 
@@ -86,6 +86,9 @@ async def run_one(
 
     reply = ""
     for text in scenario.turns:
+        if text == NEW_CONVERSATION:
+            net.new_conversation()
+            continue
         reply = await turn(text)
     if scenario.special == "replay_user_request":
         reply = await net.replay_user_request()

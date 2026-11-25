@@ -151,6 +151,9 @@ class DecisionLog:
 
 
 def reset_custody_stores() -> None:
-    """Forget every agent's custody state (for tests and repeated demo runs)."""
+    """Forget every agent's custody state and stored-object authors (tests, demo runs)."""
+    from .authors import reset_author_stores
+
     with _STORES_LOCK:
         _STORES.clear()
+    reset_author_stores()

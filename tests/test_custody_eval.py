@@ -25,7 +25,8 @@ def test_sets_are_well_formed_and_benign_is_at_least_as_large() -> None:
     assert len(ids) == len(set(ids))
     assert all(s.kind == "attack" for s in attacks) and all(s.kind == "benign" for s in benign)
     assert len(benign) >= len(attacks) >= 30
-    assert all(set(s.expect) == {"none", "custody"} for s in attacks + benign)
+    from agent_applications.custody_demo.settings import DEFENSES
+    assert all({"none", "custody"} <= set(s.expect) <= set(DEFENSES) for s in attacks + benign)
 
 
 @pytest.fixture(scope="module")

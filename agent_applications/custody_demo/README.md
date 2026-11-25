@@ -7,7 +7,7 @@ loaded by the framework from [`config.toml`](config.toml).
 | Entity      | Custody identity         | Org   | Role                                                   |
 | ----------- | ------------------------ | ----- | ------------------------------------------------------ |
 | `user`      | `agent:acme/user-client` | acme  | The human's client (Type-1). Signs consent.            |
-| `assistant` | `agent:acme/assistant`   | acme  | Takes user requests, calls the other agents.           |
+| `assistant` | `agent:acme/assistant`   | acme  | Takes user requests, calls the other agents; has a memory (`remember`/`recall`) that outlives conversations, with authors tracked. |
 | `inbox`     | `agent:acme/inbox`       | acme  | Reads the mailbox (`read_inbox`, tagged by sender).    |
 | `finance`   | `agent:fin/finance`      | fin   | `pay` tool, guarded.                                   |
 | `hr`        | `agent:hr/hr`            | hr    | `get_salary` tool, guarded.                            |
