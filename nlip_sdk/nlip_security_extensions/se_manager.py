@@ -66,6 +66,12 @@ class SecurityEvent:
 
     ``session.history`` contains completed earlier turns. ``related_message`` is the
     request paired with a response event and is otherwise absent.
+
+    ``scope`` names the causal context of the event: on the server it is the
+    server session id; on the client it is the scope the outbound conversation was
+    opened under (normally the inbound server session that caused it), or ``None``
+    for an unscoped client conversation. Extensions can use it to link an outbound
+    call, and its response, to the inbound conversation that triggered it.
     """
 
     point: EnforcementPoint
@@ -75,6 +81,7 @@ class SecurityEvent:
     peer: str | None
     component: Literal["client", "server"]
     related_message: NLIPMessage | None = None
+    scope: str | None = None
 
 
 class SecurityExtension(ABC):
@@ -230,6 +237,7 @@ class SecurityExtensionManager:
         *,
         component: Literal["client", "server"],
         related_message: NLIPMessage | None = None,
+        scope: str | None = None,
     ) -> NLIPMessage:
         """Run one ordered point, failing closed on extension errors."""
         current = message.model_copy(deep=True)
@@ -246,6 +254,7 @@ class SecurityExtensionManager:
                     if related_message is not None
                     else None
                 ),
+                scope=scope,
             )
             try:
                 decision = await extension.evaluate(event)
@@ -273,6 +282,7 @@ class SecurityExtensionManager:
         *,
         component: Literal["client", "server"],
         related_message: NLIPMessage | None = None,
+        scope: str | None = None,
     ) -> NLIPMessage:
         return await self.enforce(
             EnforcementPoint.INGRESS,
@@ -280,6 +290,7 @@ class SecurityExtensionManager:
             session,
             component=component,
             related_message=related_message,
+            scope=scope,
         )
 
     async def enforce_egress(
@@ -289,6 +300,7 @@ class SecurityExtensionManager:
         *,
         component: Literal["client", "server"],
         related_message: NLIPMessage | None = None,
+        scope: str | None = None,
     ) -> NLIPMessage:
         return await self.enforce(
             EnforcementPoint.EGRESS,
@@ -296,4 +308,5 @@ class SecurityExtensionManager:
             session,
             component=component,
             related_message=related_message,
+            scope=scope,
         )

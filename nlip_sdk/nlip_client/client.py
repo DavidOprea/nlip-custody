@@ -29,9 +29,14 @@ def _nlip_endpoint(url: str) -> str:
 class NLIPClientSession:
     """A conversation with one destination, including its own tokens and history."""
 
-    def __init__(self, client: "NLIPClient", destination: str) -> None:
+    def __init__(
+        self, client: "NLIPClient", destination: str, *, scope: str | None = None
+    ) -> None:
         self._client = client
         self.destination = client._destination(destination)
+        # The parent context (normally an inbound server session id) that owns this
+        # conversation; passed to security extensions as ``SecurityEvent.scope``.
+        self.scope = scope
         self.context = NLIPSession(
             token_urlsafe(24),
             peer=self.destination,
@@ -85,7 +90,7 @@ class NLIPClientSession:
         """Run one message through this conversation's complete client pipeline."""
         outgoing = self._prepare(message)
         outgoing = await self._client.security.enforce_egress(
-            outgoing, self.context, component="client"
+            outgoing, self.context, component="client", scope=self.scope
         )
         # A replacement may change content, but transport-owned session tokens remain.
         outgoing = self._prepare(outgoing)
@@ -96,6 +101,7 @@ class NLIPClientSession:
             self.context,
             component="client",
             related_message=outgoing,
+            scope=self.scope,
         )
         return self._accept_response(outgoing, incoming)
 
@@ -238,9 +244,11 @@ class NLIPClient:
             )
         return name
 
-    def create_session(self, destination: str) -> NLIPClientSession:
+    def create_session(
+        self, destination: str, *, scope: str | None = None
+    ) -> NLIPClientSession:
         """Create an independent conversation, even with an already-used destination."""
-        return NLIPClientSession(self, destination)
+        return NLIPClientSession(self, destination, scope=scope)
 
     def session(
         self, destination: str, *, scope: str | None = None
@@ -251,7 +259,7 @@ class NLIPClient:
             raise ValueError("NLIP client session scope must be a non-empty string.")
         key = (scope, destination)
         if key not in self._sessions:
-            self._sessions[key] = self.create_session(destination)
+            self._sessions[key] = self.create_session(destination, scope=scope)
         return self._sessions[key]
 
     def clear_scope(self, scope: str) -> None:

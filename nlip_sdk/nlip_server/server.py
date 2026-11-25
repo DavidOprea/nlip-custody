@@ -127,7 +127,7 @@ class NLIPServer(ABC):
         async with session.lock:
             wire_request = request
             request = await self.security.enforce_ingress(
-                request, session, component="server"
+                request, session, component="server", scope=session.id
             )
             # Subclasses implement only the agent response; this method owns the
             # surrounding NLIP session, security, and protocol behavior.
@@ -142,7 +142,11 @@ class NLIPServer(ABC):
                 response.messagetype = ReservedToken.control.value
 
             response = await self.security.enforce_egress(
-                response, session, component="server", related_message=request
+                response,
+                session,
+                component="server",
+                related_message=request,
+                scope=session.id,
             )
             # A replacement may omit protocol metadata, so restore it afterwards.
             response.echo_tokens_from(wire_request)
