@@ -31,7 +31,7 @@ import httpx
 from .agents import AGENTS
 from .scenarios import world_from_definition
 from .settings import DEFENSES, DemoSettings, key_filename
-from .world import ConsentRequest, Payment, World
+from .world import Payment, World
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 AUTHKEY_ENV = "CUSTODY_SIGNER_AUTHKEY"
@@ -63,10 +63,6 @@ def world_from_json(data: dict) -> World:
     world.salary_reads = list(data["salary_reads"])
     world.rogue_received = list(data["rogue_received"])
     world.tool_blocks = list(data["tool_blocks"])
-    world.consent_requests = [
-        ConsentRequest(r["agent"], r["tool"], r["args"], tuple(r["offenders"]))
-        for r in data["consent_requests"]
-    ]
     return world
 
 
@@ -169,7 +165,6 @@ class Stack:
             merged.salary_reads += part.salary_reads
             merged.rogue_received += part.rogue_received
             merged.tool_blocks += part.tool_blocks
-            merged.consent_requests += part.consent_requests
         return merged
 
 

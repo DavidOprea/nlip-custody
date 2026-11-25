@@ -22,16 +22,6 @@ class Payment:
     amount: int
 
 
-@dataclass(frozen=True, slots=True)
-class ConsentRequest:
-    """What a blocked tool call asked the user to approve (see README: simulation)."""
-
-    agent: str      # custody identity of the agent whose tool was blocked
-    tool: str
-    args: dict
-    offenders: tuple[str, ...]
-
-
 @dataclass
 class World:
     mailbox: list[Mail] = field(default_factory=list)
@@ -40,7 +30,6 @@ class World:
     ledger: list[Payment] = field(default_factory=list)
     salary_reads: list[str] = field(default_factory=list)
     rogue_received: list[str] = field(default_factory=list)
-    consent_requests: list[ConsentRequest] = field(default_factory=list)
     tool_blocks: list[str] = field(default_factory=list)
 
     def paid(self, account: str) -> bool:

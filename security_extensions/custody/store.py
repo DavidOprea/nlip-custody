@@ -35,6 +35,11 @@ class CustodyStore:
         self._callers: dict[str | None, str | None] = {}
         # Consent tokens seen in this task: opaque here, verified by the tool guard.
         self._consents: dict[str | None, list[str]] = {}
+        # Blocked calls waiting to be signed into consent requests (by the SE at
+        # server egress), and signed requests from downstream waiting to be forwarded
+        # upstream (or, at the user's client, shown to the user).
+        self._pending_requests: dict[str | None, list[dict[str, Any]]] = {}
+        self._request_tokens: dict[str | None, list[str]] = {}
         self._lock = threading.Lock()
 
     def add(self, scope: str | None, principals: Iterable[str]) -> frozenset[str]:
@@ -79,11 +84,42 @@ class CustodyStore:
             if pool and token in pool:
                 pool.remove(token)
 
+    def add_pending_request(
+        self, scope: str | None, tool: str, args: dict[str, Any], offenders: Iterable[str]
+    ) -> None:
+        with self._lock:
+            pool = self._pending_requests.setdefault(scope, [])
+            entry = {"tool": tool, "args": dict(args), "offenders": sorted(offenders)}
+            if entry not in pool:
+                pool.append(entry)
+                del pool[:-32]
+
+    def take_pending_requests(self, scope: str | None) -> list[dict[str, Any]]:
+        with self._lock:
+            return self._pending_requests.pop(scope, [])
+
+    def add_request_token(self, scope: str | None, token: str) -> None:
+        with self._lock:
+            pool = self._request_tokens.setdefault(scope, [])
+            if token not in pool:
+                pool.append(token)
+                del pool[:-32]
+
+    def request_tokens(self, scope: str | None) -> tuple[str, ...]:
+        with self._lock:
+            return tuple(self._request_tokens.get(scope, ()))
+
+    def take_request_tokens(self, scope: str | None) -> list[str]:
+        with self._lock:
+            return self._request_tokens.pop(scope, [])
+
     def clear(self, scope: str | None) -> None:
         with self._lock:
             self._sets.pop(scope, None)
             self._callers.pop(scope, None)
             self._consents.pop(scope, None)
+            self._pending_requests.pop(scope, None)
+            self._request_tokens.pop(scope, None)
 
 
 _STORES: dict[str, CustodyStore] = {}

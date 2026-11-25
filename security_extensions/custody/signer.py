@@ -27,7 +27,7 @@ import secrets
 import sys
 import threading
 import time
-from collections.abc import Callable, Collection, Iterable
+from collections.abc import Callable, Collection, Iterable, Mapping
 from multiprocessing.connection import Client, Connection, Listener
 from typing import Any, Protocol
 
@@ -52,6 +52,10 @@ class Signer(Protocol):
 
     def sign(self, aud: str, msg_digest: str, principals: Iterable[str]) -> str: ...
 
+    def sign_consent_request(
+        self, tool: str, args: Mapping[str, Any], offenders: Iterable[str]
+    ) -> str: ...
+
 
 class SignerError(RuntimeError):
     """The signer refused a request or could not be reached."""
@@ -66,16 +70,20 @@ class CustodySigner:
         private_key: Ed25519PrivateKey,
         *,
         ttl: int = 60,
+        request_ttl: int = 600,
         allowed_audiences: Collection[str] | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
         agent_org(identity)
         if not 1 <= ttl <= 300:
             raise ValueError("ttl must be between 1 and 300 seconds.")
+        if not 1 <= request_ttl <= 3600:
+            raise ValueError("request_ttl must be between 1 and 3600 seconds.")
         self.identity = identity
         self.subformat = subformat_for(identity)
         self._key = private_key
         self._ttl = ttl
+        self._request_ttl = request_ttl
         self._audiences = None if allowed_audiences is None else set(allowed_audiences)
         self._clock = clock
 
@@ -99,6 +107,18 @@ class CustodySigner:
             principals=CustodyClaims.normalize_principals(principals),
         )
         return encode_token(claims, self._key)
+
+    def sign_consent_request(
+        self, tool: str, args: Mapping[str, Any], offenders: Iterable[str]
+    ) -> str:
+        """A signed consent request for one blocked call; iss/nonce/expiry are ours."""
+        from .request import encode_request, new_request_claims
+
+        if not isinstance(tool, str) or not tool:
+            raise CustodyTokenError("A consent request needs a tool name.")
+        claims = new_request_claims(self.identity, tool, args, offenders,
+                                    ttl=self._request_ttl, now=int(self._clock()))
+        return encode_request(claims, self._key)
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +169,15 @@ def handle_request(signer: CustodySigner, request: dict[str, Any]) -> dict[str, 
             return {"error": "sign needs aud, msg_digest and a list of principals."}
         try:
             return {"token": signer.sign(aud, digest, principals)}
+        except (CustodyTokenError, ValueError) as error:
+            return {"error": str(error)}
+    if op == "sign_consent_request":
+        tool, args, offenders = request.get("tool"), request.get("args"), request.get("offenders")
+        if not (isinstance(tool, str) and isinstance(args, dict) and isinstance(offenders, list)
+                and all(isinstance(p, str) for p in offenders)):
+            return {"error": "sign_consent_request needs tool, args and a list of offenders."}
+        try:
+            return {"token": signer.sign_consent_request(tool, args, offenders)}
         except (CustodyTokenError, ValueError) as error:
             return {"error": str(error)}
     return {"error": f"Unknown op {op!r}."}
@@ -240,6 +269,16 @@ class RemoteSigner:
         if "error" in response:
             raise SignerError(str(response["error"]))
         return response
+
+    def sign_consent_request(
+        self, tool: str, args: Mapping[str, Any], offenders: Iterable[str]
+    ) -> str:
+        response = self._call({
+            "op": "sign_consent_request", "tool": tool,
+            "args": json.loads(json.dumps(dict(args), default=str)),
+            "offenders": list(offenders),
+        })
+        return str(response["token"])
 
     def sign(self, aud: str, msg_digest: str, principals: Iterable[str]) -> str:
         response = self._call(

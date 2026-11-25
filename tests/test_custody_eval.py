@@ -44,7 +44,7 @@ def test_every_case_matches_its_prediction(results) -> None:
 def test_headline_numbers(results) -> None:
     m = metrics(results)
     assert m["none"]["attack_success"] == m["none"]["attacks"]  # every attack is real
-    assert m["custody"]["attack_success"] == 1                   # the documented residual
+    assert m["custody"]["attack_success"] == 2                   # the documented residuals
     assert m["custody"]["benign_blocked"] == 1                   # the documented false positive
 
 

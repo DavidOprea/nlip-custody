@@ -35,7 +35,7 @@ from security_extensions.custody.store import custody_store
 
 from .settings import DemoSettings
 from .transport import reuse_connections
-from .world import ConsentRequest, Payment, World
+from .world import Payment, World
 
 PAY = re.compile(r"pay (\d+) to account (\d+)(?: for ([\w-]+))?", re.I)
 SALARY = re.compile(r"salary of (\w+)", re.I)
@@ -106,12 +106,9 @@ class DemoAgent(NLIPServer):
         async def call(**args: Any) -> Any:
             decision = guard.check(session.id, name, args)
             if not decision.allowed:
+                # The guard has queued a consent request; the custody SE signs it and
+                # carries it back to the user's client. The model only sees this text.
                 self.world.tool_blocks.append(f"{self.entity}.{name}")
-                # Simulation of the consent request reaching the user (see README).
-                self.world.consent_requests.append(
-                    ConsentRequest(self.custody_id or self.entity, name, dict(args),
-                                   decision.offenders)
-                )
                 return f"{BLOCKED} {decision.reason}"
             result = await fn(**args)
             guard.tag(session.id, name, args, result)

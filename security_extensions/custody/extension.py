@@ -54,6 +54,7 @@ from nlip_sdk.nlip_security_extensions import (
 
 from .consent import consent_subformat, decode_consent_unverified, is_consent_subformat
 from .keys import load_private_key, load_public_key
+from .request import decode_request_unverified, is_request_subformat, request_subformat
 from .replay import ReplayCache
 from .signer import CustodySigner, RemoteSigner, Signer, SignerError
 from .store import UNKNOWN, CustodyStore, DecisionLog, custody_store
@@ -70,7 +71,8 @@ from .token import (
 
 
 def _is_ours(subformat: str) -> bool:
-    return is_custody_subformat(subformat) or is_consent_subformat(subformat)
+    return (is_custody_subformat(subformat) or is_consent_subformat(subformat)
+            or is_request_subformat(subformat))
 
 
 def _has_custody_token(message: NLIPMessage) -> bool:
@@ -94,6 +96,14 @@ def _consent_tokens(message: NLIPMessage) -> list[str]:
         str(t.content)
         for t in message.token_submessages()
         if is_consent_subformat(t.subformat)
+    ]
+
+
+def _request_tokens(message: NLIPMessage) -> list[str]:
+    return [
+        str(t.content)
+        for t in message.token_submessages()
+        if is_request_subformat(t.subformat)
     ]
 
 
@@ -269,8 +279,31 @@ class CustodyExtension(SecurityExtension):
             return SecurityDecision.allow()
         principals = self.store.principals(event.scope) if self._propagate else frozenset()
         signed = await self._sign(event.message, caller, principals)
-        self._record(event, "sign", aud=caller, principals=sorted(principals))
+        requests = await self._attach_requests(signed, event.scope)
+        self._record(event, "sign", aud=caller, principals=sorted(principals),
+                     consent_requests=requests)
         return SecurityDecision.replace(signed, "custody token attached")
+
+    async def _attach_requests(self, message: NLIPMessage, scope: str | None) -> int:
+        """Sign this task's blocked calls into consent requests; forward downstream ones."""
+        attached = 0
+        signer = self._get_signer()
+        for pending in self.store.take_pending_requests(scope):
+            args = (pending["tool"], pending["args"], pending["offenders"])
+            if isinstance(signer, RemoteSigner):
+                token = await asyncio.to_thread(signer.sign_consent_request, *args)
+            else:
+                token = signer.sign_consent_request(*args)
+            message.add_token(token, request_subformat(self.identity))
+            attached += 1
+        for token in self.store.take_request_tokens(scope):
+            try:
+                issuer = decode_request_unverified(token)[0].iss
+            except CustodyTokenError:
+                continue  # malformed: not worth carrying; the user's client verifies the rest
+            message.add_token(token, request_subformat(issuer))
+            attached += 1
+        return attached
 
     async def _client_egress(self, event: SecurityEvent) -> SecurityDecision:
         destination = (event.session.peer or "").casefold()
@@ -304,6 +337,9 @@ class CustodyExtension(SecurityExtension):
         blocked, _ = await self._merge_inbound(event, expected_issuer=expected)
         if blocked is not None:
             return blocked
+        for token in _request_tokens(event.message):
+            # Carried upstream unchanged; the user's client verifies the signature.
+            self.store.add_request_token(event.scope, token)
         if _has_custody_token(event.message):
             return SecurityDecision.replace(_strip(event.message), "custody tokens removed")
         return SecurityDecision.allow()

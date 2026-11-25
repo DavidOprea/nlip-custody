@@ -182,6 +182,9 @@ class CustodyToolGuard:
                     + ("A one-time user approval of this exact call is required."
                        if self._consentable[tool] else "Consent cannot override this tool."),
                 )
+                if self._consentable[tool]:
+                    # The custody SE signs this into a consent request on the way out.
+                    self.store.add_pending_request(scope, tool, dict(args), offenders)
         self.log.write(
             identity=self.identity, point="tool", scope=scope, tool=tool,
             action="consent" if decision.consented_by else ("allow" if decision.allowed else "block"),

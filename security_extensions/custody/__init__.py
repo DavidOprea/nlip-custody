@@ -3,6 +3,7 @@
 from .consent import ConsentIssuer, ConsentVerifier, args_digest
 from .guard import CustodyToolBlocked, CustodyToolGuard, ToolDecision
 from .replay import ReplayCache
+from .request import ConsentDesk, ConsentRequestClaims
 from .token import (
     CustodyClaims,
     CustodyTokenError,
@@ -14,7 +15,9 @@ from .token import (
 )
 
 __all__ = [
+    "ConsentDesk",
     "ConsentIssuer",
+    "ConsentRequestClaims",
     "ConsentVerifier",
     "CustodyToolBlocked",
     "CustodyToolGuard",

@@ -95,11 +95,11 @@ The scenario format and the larger attack and benign sets are in
 
 ## Known simplifications (read before quoting numbers)
 
-* **Consent requests reach the user through a simulation channel.** The agent records
-  each blocked call's exact arguments in the mock world (`World.consent_requests`),
-  and the simulated user approves them. In a real deployment the request must reach
-  the user signed by the blocking agent, so a model cannot misdescribe it. That
-  signed request is not built yet (the consent-phishing gap).
+* **Consent requests are real, the user is simulated.** A blocked call becomes a
+  consent request signed by the blocking agent (through its signer process) and
+  carried back on the NLIP replies to the user's client, which verifies it. The
+  simulated user then approves according to the scenario. In B4 that means only the
+  plumber's account. See `security_extensions/custody/request.py`.
 * **Label creep is visible on purpose.** Reading the inbox tags *every* sender in it,
   so in A1 mum's address is an offender too. B4 needs consent for the same reason.
 * **The scripts' grammar is fixed.** They stand in for a fully compromised model;

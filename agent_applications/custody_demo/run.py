@@ -92,7 +92,7 @@ async def run_one(
     world = refresh()
     blocked = list(world.tool_blocks)
     consents = 0
-    if scenario.approve is not None and world.consent_requests:
+    if scenario.approve is not None and net.pending_requests():
         consents = net.approve_pending(scenario.wants)
         if consents:
             reply = await turn(scenario.turns[-1])

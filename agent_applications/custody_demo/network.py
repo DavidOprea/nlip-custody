@@ -11,9 +11,10 @@ from nlip_sdk import NLIPClient, NLIPMessage, NLIPServer
 from nlip_sdk.nlip_security_extensions import SecurityBlockedError
 
 from security_extensions.custody.consent import ConsentIssuer
+from security_extensions.custody.keys import load_pinned_keys, load_private_key
+from security_extensions.custody.request import ConsentDesk, ConsentRequestClaims
 from security_extensions.custody.signer import CustodySigner
 from security_extensions.custody.token import message_digest
-from security_extensions.custody.keys import load_private_key
 from security_extensions.custody.store import custody_store, reset_custody_stores
 
 from .agents import AGENTS, DemoAgent
@@ -41,6 +42,12 @@ class DemoNetwork:
         # that client's own security pipeline (for replay and forgery attacks).
         self.captured: dict[str, tuple[str, NLIPMessage]] = {}
         self.raw_post: dict[str, Callable] = {}
+        # The user's consent desk: verifies requests against the participating
+        # agents' pinned keys before anything is shown to the user.
+        self.desk = ConsentDesk(load_pinned_keys(
+            {i: k for i, k in settings.public_keys.items() if i != settings.user_identity}))
+        self.shown_requests: list[ConsentRequestClaims] = []
+        self.rejected_requests: list[str] = []
         if settings.mode == "inproc":
             for name, cls in AGENTS.items():
                 self.servers[name] = cls(name, settings, world)
@@ -124,19 +131,35 @@ class DemoNetwork:
             return f"(refused: {error.response.status_code})"
         return reply.extract_text(language=None) or ""
 
-    def approve_pending(self, wants: Callable[[str, dict], bool] = lambda tool, args: True) -> int:
-        """Simulated user: approve the pending consent requests ``wants`` accepts.
+    def pending_requests(self) -> list[ConsentRequestClaims]:
+        """Consent requests that reached the user's client and verify there.
 
-        The user's own client signs each approval; the custody SE carries it down
-        the chain on the retry. Returns the number of approvals.
+        They arrived as signed ``consentreq_*`` token parts on the assistant's reply
+        and were collected by the user client's custody SE. Requests that fail
+        verification (forged, tampered, expired) are dropped here and never shown.
+        """
+        if not self.settings.consent:
+            return []
+        store = custody_store(self.settings.user_identity)
+        shown, self.rejected_requests = self.desk.pending(store.take_request_tokens(None))
+        self.shown_requests.extend(shown)
+        return shown
+
+    def approve_pending(self, wants: Callable[[str, dict], bool] = lambda tool, args: True) -> int:
+        """Simulated user: approve the shown requests ``wants`` accepts, once each.
+
+        The approval is built from the *signed* request's tool and arguments, never
+        from anything a model wrote. The user's client signs it; the custody SE carries
+        it down the chain on the retry. Returns the number of approvals.
         """
         if not self.settings.consent:
             return 0
         key = load_private_key(self.settings.keys_dir / key_filename(self.settings.user_identity))
         issuer = ConsentIssuer(self.settings.user_identity, USER_PRINCIPAL, key)
         store = custody_store(self.settings.user_identity)
-        requests = [r for r in self.world.consent_requests if wants(r.tool, r.args)]
-        for request in requests:
-            store.add_consent(None, issuer.approve(request.agent, request.tool, request.args))
-        self.world.consent_requests.clear()
-        return len(requests)
+        self.pending_requests()
+        chosen = [r for r in self.shown_requests if wants(r.tool, r.args)]
+        for request in chosen:
+            store.add_consent(None, ConsentDesk.approve(request, issuer))
+        self.shown_requests.clear()
+        return len(chosen)
