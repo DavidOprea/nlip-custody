@@ -24,6 +24,7 @@ agents = [
 ]
 test = ["pytest>=8"]
 judge = ["anthropic>=1"]
+agentdojo = ["agentdojo==0.1.35"]
 
 [tool.setuptools.packages.find]
 include = [

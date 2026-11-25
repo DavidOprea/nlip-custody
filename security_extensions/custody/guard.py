@@ -75,6 +75,7 @@ class ToolDecision:
 class SourceRule:
     principals: tuple[str, ...] = ()
     result_field: str | None = None
+    ignore_values: tuple[str, ...] = ()  # e.g. the user's own address in a sender field
 
     def __post_init__(self) -> None:
         for principal in self.principals:
@@ -126,7 +127,8 @@ class CustodyToolGuard:
             self._allowed[tool] = tuple(allowed)
             self._consentable[tool] = bool(rule.get("consent", True))
         self._sources = {
-            tool: SourceRule(tuple(rule.get("principals", ())), rule.get("result_field"))
+            tool: SourceRule(tuple(rule.get("principals", ())), rule.get("result_field"),
+                             tuple(str(v).casefold() for v in rule.get("ignore_values", ())))
             for tool, rule in (sources or {}).items()
         }
         self._storage: dict[str, dict[str, str]] = {}
@@ -237,8 +239,9 @@ class CustodyToolGuard:
             added |= set(rule.principals)
             if rule.result_field:
                 values = _field_values(result, rule.result_field)
+                outside = [v for v in values if v.strip().casefold() not in rule.ignore_values]
                 added |= {hash_principal("external", v.strip().casefold(), self._salt)
-                          for v in values}
+                          for v in outside}
                 if not values:
                     added.add(UNKNOWN)  # a source tool whose authors we cannot name
         storage = self._storage.get(tool) if self.track_storage else None

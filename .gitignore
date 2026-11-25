@@ -14,3 +14,5 @@ agent_applications/custody_demo/keys/
 agent_applications/custody_demo/logs/
 keys/
 adversarial_tests/custody_eval/results/
+adversarial_tests/agentdojo_banking/results/
+agent_applications/agentdojo_split/logs/
