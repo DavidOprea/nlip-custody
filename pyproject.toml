@@ -23,6 +23,7 @@ agents = [
     "langchain-openai>=1.0",
 ]
 test = ["pytest>=8"]
+judge = ["anthropic>=1"]
 
 [tool.setuptools.packages.find]
 include = [

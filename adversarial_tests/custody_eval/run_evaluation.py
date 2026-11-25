@@ -8,8 +8,11 @@ Every case runs through the real NLIP application (``agent_applications/
 custody_demo``): the framework's server/client pipelines, the custody SE loaded from
 ``config.toml``, and the tool guard. Nothing calls the extension's internals.
 
-Defences: ``none`` (no security extension) and ``custody``. Baselines are added
-here as further defences.
+Defences (columns): ``none`` (no SE), ``judge_heuristic`` and ``judge_llm`` (a content
+judge at every door), ``per_hop`` (taint without propagation, Rule of Two),
+``authority`` (Warrant-style caps) and ``custody``. See ``security_extensions/
+baselines``. Only ``none`` and ``custody`` have per-case predictions; baselines are
+measured, not predicted.
 
 Outputs (in ``--out``, default ``results/``): ``results.json`` (one row per case and
 defence) and ``summary.md``. The exit code is 1 if any case's verdict differs
@@ -30,9 +33,11 @@ from pathlib import Path
 
 from agent_applications.custody_demo.run import Result, run_scenarios
 from agent_applications.custody_demo.scenarios import Scenario
+from agent_applications.custody_demo.settings import DEFENSES
 
 HERE = Path(__file__).resolve().parent
-DEFENSES = {"none": False, "custody": True}
+# Default order of columns. judge_llm calls the Anthropic API, so it runs only on request.
+DEFAULT_DEFENSES = ["none", "judge_heuristic", "per_hop", "authority", "custody"]
 
 
 def load(path: Path) -> list[Scenario]:
@@ -63,7 +68,7 @@ def rate(k: int, n: int) -> str:
 
 def metrics(results: list[Result]) -> dict[str, dict[str, object]]:
     out: dict[str, dict[str, object]] = {}
-    for defense in DEFENSES:
+    for defense in dict.fromkeys(r.defense for r in results):
         group = [r for r in results if r.defense == defense]
         if not group:
             continue
@@ -141,7 +146,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--attacks", default=str(HERE / "attacks.jsonl"))
     parser.add_argument("--benign", default=str(HERE / "benign.jsonl"))
-    parser.add_argument("--defense", choices=[*DEFENSES, "all"], default="all")
+    parser.add_argument("--defense", nargs="+", choices=[*DEFENSES, "all"], default=["all"],
+                        help="defences to compare (default: all except judge_llm, which "
+                             "calls the Anthropic API and needs credentials)")
     parser.add_argument("--mode", choices=["inproc", "http"], default="inproc")
     parser.add_argument("--only", nargs="*", help="run only these case ids")
     parser.add_argument("--out", default=str(HERE / "results"))
@@ -151,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     scenarios = load(Path(args.attacks)) + load(Path(args.benign))
     if args.only:
         scenarios = [s for s in scenarios if s.id in set(args.only)]
-    defenses = list(DEFENSES.values()) if args.defense == "all" else [DEFENSES[args.defense]]
+    defenses = DEFAULT_DEFENSES if args.defense == ["all"] else args.defense
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     logs = Path(tempfile.mkdtemp(prefix="custody_eval_logs_"))

@@ -130,7 +130,7 @@ class DemoNetwork:
         The user's own client signs each approval; the custody SE carries it down
         the chain on the retry. Returns the number of approvals.
         """
-        if not self.settings.custody:
+        if not self.settings.consent:
             return 0
         key = load_private_key(self.settings.keys_dir / key_filename(self.settings.user_identity))
         issuer = ConsentIssuer(self.settings.user_identity, USER_PRINCIPAL, key)

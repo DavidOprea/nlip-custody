@@ -59,7 +59,7 @@ class Result:
 
 
 async def run_one(
-    scenario: Scenario, *, custody: bool, mode: Mode, log_dir: Path, stack=None
+    scenario: Scenario, *, defense: str, mode: Mode, log_dir: Path, stack=None
 ) -> Result:
     """One scenario under one defence. ``stack`` is the running HTTP stack, if any."""
     started = time.perf_counter()
@@ -67,7 +67,7 @@ async def run_one(
         stack.reset(scenario.world_definition())
         settings, world = stack.settings, World()
     else:
-        settings = DemoSettings(custody=custody, mode=mode, log_dir=log_dir)
+        settings = DemoSettings(defense=defense, mode=mode, log_dir=log_dir)
         world = scenario.world()
     net = DemoNetwork(settings, world)
 
@@ -97,7 +97,6 @@ async def run_one(
         if consents:
             reply = await turn(scenario.turns[-1])
             world = refresh()
-    defense = "custody" if custody else "none"
     return Result(
         scenario.id, scenario.kind, scenario.category, defense,
         scenario.check(world, reply), blocked, consents,
@@ -105,30 +104,38 @@ async def run_one(
     )
 
 
+def _defense(value: str | bool) -> str:
+    if isinstance(value, bool):  # the demo's original on/off switch
+        return "custody" if value else "none"
+    return value
+
+
 async def run_scenarios(
-    scenarios: Sequence[Scenario], defenses: Sequence[bool], mode: Mode, log_root: Path
+    scenarios: Sequence[Scenario], defenses: Sequence[str | bool], mode: Mode, log_root: Path
 ) -> list[Result]:
+    names = [_defense(d) for d in defenses]
     results = []
-    for custody in defenses:
-        label = "custody_on" if custody else "custody_off"
+    for defense in names:
+        label = defense
         if mode == "http":
             from .serve import Stack
 
-            with Stack(custody, log_root / label) as stack:
+            with Stack(defense, log_root / label) as stack:
                 for scenario in scenarios:
                     results.append(await run_one(
-                        scenario, custody=custody, mode=mode, log_dir=log_root / label,
+                        scenario, defense=defense, mode=mode, log_dir=log_root / label,
                         stack=stack))
         else:
             for scenario in scenarios:
                 results.append(await run_one(
-                    scenario, custody=custody, mode=mode,
+                    scenario, defense=defense, mode=mode,
                     log_dir=log_root / label / scenario.id))
     order = {s.id: n for n, s in enumerate(scenarios)}
-    return sorted(results, key=lambda r: (order[r.scenario], r.custody))
+    rank = {d: n for n, d in enumerate(names)}
+    return sorted(results, key=lambda r: (order[r.scenario], rank[r.defense]))
 
 
-async def run(ids: list[str], defenses: list[bool], mode: Mode, log_root: Path) -> list[Result]:
+async def run(ids: list[str], defenses: list, mode: Mode, log_root: Path) -> list[Result]:
     """The demo's own showcase scenarios."""
     return await run_scenarios([BY_ID[i] for i in ids] if ids else SCENARIOS,
                                defenses, mode, log_root)

@@ -109,6 +109,7 @@ class CustodyExtension(SecurityExtension):
         peers: Mapping[str, str] | None = None,
         origin_principals: Collection[str] = (),
         on_invalid_token: Literal["block", "unknown"] = "block",
+        propagate: bool = True,
         ttl: int = 60,
         log_path: str | None = None,
         store: CustodyStore | None = None,
@@ -155,6 +156,10 @@ class CustodyExtension(SecurityExtension):
         for ident in self._peers.values():
             agent_org(ident)
         self._origin = frozenset(validate_principal(p) for p in origin_principals)
+        # propagate=False keeps tokens as sender authentication only: no principal
+        # set travels, and only the verified sender is recorded. This is the
+        # "per-hop" ablation the baselines use.
+        self._propagate = propagate
         self._on_invalid = on_invalid_token
         self.store = store if store is not None else custody_store(identity)
         self.log = DecisionLog(log_path)
@@ -223,7 +228,12 @@ class CustodyExtension(SecurityExtension):
             self._record(event, "reject", reason=error)
             if self._on_invalid == "block":
                 return SecurityDecision.block(f"custody: {error}"), None
-        added = {claims.iss, *claims.principals} if claims else {UNKNOWN}
+        if claims is None:
+            added = {UNKNOWN}
+        elif self._propagate:
+            added = {claims.iss, *claims.principals}
+        else:
+            added = {claims.iss}
         total = self.store.add(event.scope, added)
         self._record(
             event,
@@ -257,7 +267,7 @@ class CustodyExtension(SecurityExtension):
         if caller is None:
             self._record(event, "unsigned", reason="caller sent no custody token")
             return SecurityDecision.allow()
-        principals = self.store.principals(event.scope)
+        principals = self.store.principals(event.scope) if self._propagate else frozenset()
         signed = await self._sign(event.message, caller, principals)
         self._record(event, "sign", aud=caller, principals=sorted(principals))
         return SecurityDecision.replace(signed, "custody token attached")
@@ -274,6 +284,8 @@ class CustodyExtension(SecurityExtension):
             principals = self._origin
         else:
             principals = self.store.principals(event.scope)
+        if not self._propagate:
+            principals = frozenset()
         signed = await self._sign(event.message, aud, principals)
         consents = self.store.consents(event.scope)
         for token in consents:

@@ -137,3 +137,26 @@ identity = "agent:hr/hr"
 log_path = "logs/hr.jsonl"
 [custody_guard.hr.policy.get_salary]
 allowed = ["user:*", "agent:acme/user-client", "agent:acme/assistant", "agent:hr/*", "agent:fin/*"]
+
+# ------------------------------------------------------------ baselines
+# Used only when the runner selects that defence (see settings.py). Each one reuses
+# the custody SE definitions above with one idea changed.
+
+# Per-hop taint (Rule of Two style): tokens authenticate senders but carry no
+# principal set; same tool policies; plus "untrusted + sensitive -> no outside send".
+[baselines.per_hop]
+entrypoint = "security_extensions.baselines.per_hop:PerHopTaintExtension"
+sensitive_sources = ["hr"]
+outside_destinations = ["rogue"]
+
+# Authority narrowing (Warrant style): the user delegates pay and get_salary to the
+# assistant, capped; each provider's own agents also hold them.
+[baselines.authority.finance.warrants.pay]
+holders = ["agent:acme/assistant", "agent:fin/*"]
+max = { amount = 10000 }
+[baselines.authority.hr.warrants.get_salary]
+holders = ["agent:acme/assistant", "agent:hr/*"]
+
+# Content judge at every door.
+[baselines.judge]
+entrypoint = "security_extensions.baselines.judge:ContentJudgeExtension"

@@ -12,7 +12,7 @@ mock world and read the outcome; these are demo plumbing, not part of NLIP.
 
 Run one agent by hand::
 
-    python -m agent_applications.custody_demo.serve finance --custody on
+    python -m agent_applications.custody_demo.serve finance --defense custody
 """
 
 from __future__ import annotations
@@ -30,15 +30,15 @@ import httpx
 
 from .agents import AGENTS
 from .scenarios import world_from_definition
-from .settings import DemoSettings, key_filename
+from .settings import DEFENSES, DemoSettings, key_filename
 from .world import ConsentRequest, Payment, World
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 AUTHKEY_ENV = "CUSTODY_SIGNER_AUTHKEY"
 
 
-def build_app(name: str, custody: bool, log_dir: str | None = None):
-    settings = DemoSettings(custody=custody, mode="http", log_dir=log_dir)
+def build_app(name: str, defense: str, log_dir: str | None = None):
+    settings = DemoSettings(defense=defense, mode="http", log_dir=log_dir)
     world = World()
     agent = AGENTS[name](name, settings, world)
     app = agent.create_nlip_app()
@@ -73,10 +73,11 @@ def world_from_json(data: dict) -> World:
 class Stack:
     """Start signers and agents as subprocesses; stop them on exit."""
 
-    def __init__(self, custody: bool, log_dir: Path) -> None:
-        self.custody = custody
+    def __init__(self, defense: str, log_dir: Path) -> None:
+        self.defense = defense
         self.log_dir = log_dir
-        self.settings = DemoSettings(custody=custody, mode="http", log_dir=log_dir)
+        self.settings = DemoSettings(defense=defense, mode="http", log_dir=log_dir)
+        self.custody = self.settings.signers
         self.procs: list[subprocess.Popen] = []
         self.labels: list[str] = []
         self.authkeys = {i: secrets.token_urlsafe(32) for i in self.settings.identities.values()}
@@ -108,7 +109,7 @@ class Stack:
                 identity = s.identities.get(name)
                 self._spawn(f"agent_{name}", [
                     "-m", "agent_applications.custody_demo.serve", name,
-                    "--custody", "on" if self.custody else "off", "--logs", str(self.log_dir),
+                    "--defense", self.defense, "--logs", str(self.log_dir),
                 ], self.authkeys.get(identity) if (self.custody and identity) else None)
             self._wait_ready()
         except BaseException:
@@ -175,12 +176,12 @@ class Stack:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Serve one demo agent over HTTP.")
     parser.add_argument("name", choices=sorted(AGENTS))
-    parser.add_argument("--custody", choices=["on", "off"], default="on")
+    parser.add_argument("--defense", choices=list(DEFENSES), default="custody")
     parser.add_argument("--logs", default=None)
     args = parser.parse_args(argv)
     import uvicorn
 
-    app, settings = build_app(args.name, args.custody == "on", args.logs)
+    app, settings = build_app(args.name, args.defense, args.logs)
     entity = settings.entity(args.name)
     uvicorn.run(app, host=entity["host"], port=entity["port"], log_level="warning")
 

@@ -9,8 +9,13 @@ The TOML file stays static and readable; this loader adds, per run:
 * the signer source: ``key_file`` in-process, ``signer`` (separate process) over HTTP;
 * absolute paths for keys and logs.
 
-With ``custody=False`` every entity's security pipeline and every tool guard is
-removed, which is baseline 1 (no security extension).
+The ``defense`` picks what runs, all built from the same ``config.toml``:
+
+* ``none``: every security pipeline and tool guard removed (baseline 1);
+* ``custody``: the custody SE plus the tool guards (the contribution);
+* ``per_hop``: the same SEs with no propagation, plus the Rule of Two (baseline 3);
+* ``authority``: sender tokens plus warrant caps at the tools (baseline 4);
+* ``judge_heuristic`` / ``judge_llm``: a content judge at every door (baseline 2).
 """
 
 from __future__ import annotations
@@ -33,6 +38,10 @@ from security_extensions.custody.store import CustodyStore
 APP_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = APP_DIR / "config.toml"
 Mode = Literal["inproc", "http"]
+Defense = Literal["none", "custody", "per_hop", "authority", "judge_heuristic", "judge_llm"]
+DEFENSES: tuple[str, ...] = (
+    "none", "judge_heuristic", "judge_llm", "per_hop", "authority", "custody",
+)
 
 
 def key_filename(identity: str) -> str:
@@ -55,15 +64,20 @@ class DemoSettings:
     def __init__(
         self,
         *,
-        custody: bool = True,
+        defense: Defense = "custody",
+        custody: bool | None = None,
         mode: Mode = "inproc",
         log_dir: str | Path | None = None,
         config_path: Path = CONFIG_PATH,
     ) -> None:
+        if custody is not None:  # backwards-compatible on/off switch
+            defense = "custody" if custody else "none"
+        if defense not in DEFENSES:
+            raise ValueError(f"Unknown defence {defense!r}; choose from {', '.join(DEFENSES)}.")
         with config_path.open("rb") as handle:
             raw = tomllib.load(handle)
         base = config_path.parent
-        self.custody = custody
+        self.defense = defense
         self.mode = mode
         section = raw["custody"]
         self.identities: dict[str, str] = dict(section["identities"])
@@ -71,12 +85,23 @@ class DemoSettings:
         self.log_dir = Path(log_dir).resolve() if log_dir else (base / section["log_dir"]).resolve()
         self.public_keys = ensure_keys(self.keys_dir, list(self.identities.values()))
         self.user_identity = self.identities["user"]
+        self.baselines = raw.get("baselines", {})
         self.config = self._build(raw)
-        self.guards: dict[str, dict[str, Any]] = (
-            {name: self._guard_options(opts) for name, opts in raw.get("custody_guard", {}).items()}
-            if custody
-            else {}
-        )
+        self.guards: dict[str, tuple[type, dict[str, Any]]] = self._guards(raw)
+
+    @property
+    def custody(self) -> bool:
+        """Signed sender tokens and a per-task store (custody and the token baselines)."""
+        return self.defense in {"custody", "per_hop", "authority"}
+
+    @property
+    def consent(self) -> bool:
+        """Whether a blocked call can be released by the user's one-time consent."""
+        return self.defense in {"custody", "per_hop"}
+
+    @property
+    def signers(self) -> bool:
+        return self.custody
 
     # -------------------------------------------------------------- building
 
@@ -87,14 +112,32 @@ class DemoSettings:
 
     def _build(self, raw: dict[str, Any]) -> dict[str, Any]:
         config = copy.deepcopy(raw)
-        if not self.custody:
+        if self.defense == "none":
             for entity in config["entities"].values():
                 entity.pop("security", None)
             config["security_extensions"] = {}
             return config
+        if self.defense.startswith("judge_"):
+            judge = self.baselines["judge"]
+            config["security_extensions"] = {"content_judge": {
+                "entrypoint": judge["entrypoint"],
+                "options": {"detector": self.defense.removeprefix("judge_"),
+                            **({"model": judge["model"]} if "model" in judge else {})},
+            }}
+            for entity in config["entities"].values():
+                if "security" in entity:
+                    entity["security"] = {"ingress": ["content_judge"], "egress": ["content_judge"]}
+            return config
         for definition in config.get("security_extensions", {}).values():
             options = definition.setdefault("options", {})
             identity = options["identity"]
+            if self.defense == "per_hop":
+                per_hop = self.baselines["per_hop"]
+                definition["entrypoint"] = per_hop["entrypoint"]
+                options["sensitive_sources"] = list(per_hop.get("sensitive_sources", []))
+                options["outside_destinations"] = list(per_hop.get("outside_destinations", []))
+            elif self.defense == "authority":
+                options["propagate"] = False
             if self.mode == "inproc":
                 options.pop("signer", None)
                 options["key_file"] = self._path(options["key_file"])
@@ -110,6 +153,24 @@ class DemoSettings:
                 if ident != identity and name != "user"
             }
         return config
+
+    def _guards(self, raw: dict[str, Any]) -> dict[str, tuple[type, dict[str, Any]]]:
+        if self.defense in {"custody", "per_hop"}:
+            return {name: (CustodyToolGuard, self._guard_options(opts))
+                    for name, opts in raw.get("custody_guard", {}).items()}
+        if self.defense == "authority":
+            from security_extensions.baselines.authority import AuthorityGuard
+
+            out = {}
+            for name, section in self.baselines.get("authority", {}).items():
+                opts = {"identity": self.identities[name],
+                        "warrants": copy.deepcopy(section["warrants"])}
+                log = raw.get("custody_guard", {}).get(name, {}).get("log_path")
+                if log:
+                    opts["log_path"] = self._path(log, log=True)
+                out[name] = (AuthorityGuard, opts)
+            return out
+        return {}
 
     def _guard_options(self, options: dict[str, Any]) -> dict[str, Any]:
         options = copy.deepcopy(options)
@@ -135,10 +196,11 @@ class DemoSettings:
         return SecurityExtensionManager.from_config(self.config, entity=entity)
 
     def guard(self, entity: str, store: CustodyStore | None) -> CustodyToolGuard | None:
-        options = self.guards.get(entity)
-        if options is None:
+        entry = self.guards.get(entity)
+        if entry is None:
             return None
-        return CustodyToolGuard.from_config(options, store=store)
+        cls, options = entry
+        return cls.from_config(options, store=store)
 
     def signer_address(self, identity: str) -> str:
         for definition in self.config["security_extensions"].values():
